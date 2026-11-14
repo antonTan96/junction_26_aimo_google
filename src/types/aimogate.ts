@@ -27,12 +27,28 @@ export interface WarehouseStock {
   reserved_packs: number;
 }
 
+export type CategoryTimeWindow = 'weekly' | 'daily' | 'monthly' | 'none';
+
+export interface CategoryRule {
+  category: string;
+  time_window: CategoryTimeWindow;
+  max_storage_litres: number;
+  rule_valid_until: string | null;
+}
+
+export interface CategoryRuleUsageDTO extends CategoryRule {
+  current_period_consumed_litres: number;
+  is_expired: boolean;
+  days_remaining: number | null;
+}
+
 export interface TenantPolicy {
   tenant_id: string;
   tenant_name: string;
   max_auto_approve_eur: number;
   max_auto_approve_litres: number;
   allowed_categories: string[];
+  category_rules?: Record<string, CategoryRule>;
   anomaly_sensitivity_pct: number;
   auto_dispute_enabled: boolean;
 }
@@ -185,6 +201,8 @@ export interface GuardrailWhitelistDTO {
   restricted_categories: string[];
   max_auto_approve_eur: number;
   active_grants_count: number;
+  category_rules?: Record<string, CategoryRule>;
+  category_usage?: Record<string, CategoryRuleUsageDTO>;
 }
 
 export interface StockSummaryItem {

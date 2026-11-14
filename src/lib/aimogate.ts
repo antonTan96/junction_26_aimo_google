@@ -2,6 +2,9 @@ import type {
   AgentRunResponse,
   AgentStepTrace,
   AuditLogEntry,
+  CategoryRule,
+  CategoryRuleUsageDTO,
+  CategoryTimeWindow,
   CustomerRosterItem,
   GuardrailWhitelistDTO,
   NetworkOverview,
@@ -60,21 +63,46 @@ export function computeShortHash(input: string): string {
   return `${full.slice(0, 6)}...${full.slice(-4)}`;
 }
 
+export function getTimeWindowDurationMs(window: CategoryTimeWindow): number | null {
+  switch (window) {
+    case 'daily':
+      return 1 * 86400_000;
+    case 'weekly':
+      return 7 * 86400_000;
+    case 'monthly':
+      return 30 * 86400_000;
+    case 'none':
+    default:
+      return null;
+  }
+}
+
 export interface PolicyEvaluationResult {
   passes: boolean;
   violations: string[];
   matchingGrant: RecurrentApprovalGrant | null;
 }
 
-export function evaluatePolicy(params: {
+export interface PolicyEvaluationParams {
   policy: TenantPolicy;
   product: Product;
   quote: QuoteLock;
-  activeGrants: RecurrentApprovalGrant[];
+  activeGrants?: RecurrentApprovalGrant[];
+  existingOrders?: OrderDTO[];
+  orders?: OrderDTO[];
   killswitchHalted?: boolean;
   now?: Date;
-}): PolicyEvaluationResult {
-  const { policy, product, quote, activeGrants, killswitchHalted = false, now = new Date() } = params;
+}
+
+export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvaluationResult {
+  const {
+    policy,
+    product,
+    quote,
+    activeGrants = [],
+    killswitchHalted = false,
+    now = new Date(),
+  } = params;
   const violations: string[] = [];
   let matchingGrant: RecurrentApprovalGrant | null = null;
 
@@ -116,6 +144,55 @@ export function evaluatePolicy(params: {
     );
   }
 
+  const catKey = product.category.toLowerCase();
+  const categoryRule = policy.category_rules?.[catKey] || policy.category_rules?.[product.category];
+
+  if (!matchingGrant && categoryRule) {
+    // 1. Expiration check: If rule_valid_until is set and now > rule_valid_until, rule is expired
+    if (categoryRule.rule_valid_until !== null && categoryRule.rule_valid_until !== undefined) {
+      const validUntil = new Date(categoryRule.rule_valid_until);
+      if (!isNaN(validUntil.getTime()) && now.getTime() > validUntil.getTime()) {
+        violations.push(
+          `Category rule for '${product.category}' has expired on ${categoryRule.rule_valid_until}. Human approval required.`
+        );
+      }
+    }
+
+    // 2. Cumulative storage limit check in active time window
+    if (categoryRule.time_window !== 'none' && categoryRule.max_storage_litres > 0) {
+      const durationMs = getTimeWindowDurationMs(categoryRule.time_window);
+      let pastLitres = 0;
+      if (durationMs !== null) {
+        const windowStartMs = now.getTime() - durationMs;
+        const orderList = params.existingOrders || params.orders || [];
+        for (const o of orderList) {
+          if (o.tenant_id !== policy.tenant_id) continue;
+          if (o.status !== 'CONFIRMED') continue;
+          const oTime = new Date(o.created_at).getTime();
+          if (isNaN(oTime) || oTime < windowStartMs || oTime > now.getTime()) continue;
+          const oCat = (o.category || '').toLowerCase();
+          if (oCat === catKey) {
+            pastLitres += Number(o.total_litres) || 0;
+          }
+        }
+      }
+      const periodVolume = Number((pastLitres + totalLitres).toFixed(1));
+      if (periodVolume > categoryRule.max_storage_litres) {
+        const windowName = categoryRule.time_window.charAt(0).toUpperCase() + categoryRule.time_window.slice(1);
+        const unit = categoryRule.time_window === 'weekly' ? 'week' : categoryRule.time_window === 'daily' ? 'day' : 'month';
+        violations.push(
+          `${windowName} storage limit exceeded for category '${product.category}': Order brings period volume to ${periodVolume.toFixed(1)}L, exceeding limit of ${categoryRule.max_storage_litres.toFixed(1)}L/${unit}. Requires human approval.`
+        );
+      }
+    } else if (categoryRule.time_window === 'none' && categoryRule.max_storage_litres > 0) {
+      if (totalLitres > categoryRule.max_storage_litres) {
+        violations.push(
+          `Order volume ${totalLitres.toFixed(1)}L exceeds category storage limit of ${categoryRule.max_storage_litres.toFixed(1)}L`
+        );
+      }
+    }
+  }
+
   if (!matchingGrant && lockedEur > maxEur) {
     if (!violations.some((v) => v.includes('budget exceeded'))) {
       violations.push(
@@ -124,7 +201,7 @@ export function evaluatePolicy(params: {
     }
   }
 
-  if (!matchingGrant && totalLitres > maxLitres) {
+  if (!matchingGrant && !categoryRule && totalLitres > maxLitres) {
     violations.push(
       `Order volume ${totalLitres.toFixed(1)}L exceeds autonomous limit of ${maxLitres.toFixed(1)}L`
     );
@@ -135,6 +212,10 @@ export function evaluatePolicy(params: {
     violations,
     matchingGrant,
   };
+}
+
+export function evaluatePolicy(params: PolicyEvaluationParams): PolicyEvaluationResult {
+  return evaluateOrderPolicy(params);
 }
 
 export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
@@ -243,6 +324,8 @@ export class AimoGateStore {
     this.idCounter = 1000;
     this.killswitchHalted = false;
 
+    const thirtyDaysLater = new Date(now.getTime() + 30 * 86400_000).toISOString();
+
     const policies: TenantPolicy[] = [
       {
         tenant_id: 'hotel_nordic_group',
@@ -250,6 +333,20 @@ export class AimoGateStore {
         max_auto_approve_eur: 800.0,
         max_auto_approve_litres: 600.0,
         allowed_categories: ['dairy', 'plant-based'],
+        category_rules: {
+          dairy: {
+            category: 'dairy',
+            time_window: 'weekly',
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          'plant-based': {
+            category: 'plant-based',
+            time_window: 'weekly',
+            max_storage_litres: 600.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+        },
         anomaly_sensitivity_pct: 82,
         auto_dispute_enabled: true,
       },
@@ -259,6 +356,26 @@ export class AimoGateStore {
         max_auto_approve_eur: 1500.0,
         max_auto_approve_litres: 1200.0,
         allowed_categories: ['dairy', 'bakery', 'plant-based'],
+        category_rules: {
+          dairy: {
+            category: 'dairy',
+            time_window: 'weekly',
+            max_storage_litres: 2000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          bakery: {
+            category: 'bakery',
+            time_window: 'weekly',
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          'plant-based': {
+            category: 'plant-based',
+            time_window: 'weekly',
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+        },
         anomaly_sensitivity_pct: 75,
         auto_dispute_enabled: true,
       },
@@ -268,6 +385,14 @@ export class AimoGateStore {
         max_auto_approve_eur: 500.0,
         max_auto_approve_litres: 400.0,
         allowed_categories: ['dairy'],
+        category_rules: {
+          dairy: {
+            category: 'dairy',
+            time_window: 'weekly',
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+        },
         anomaly_sensitivity_pct: 88,
         auto_dispute_enabled: true,
       },
@@ -277,6 +402,26 @@ export class AimoGateStore {
         max_auto_approve_eur: 2500.0,
         max_auto_approve_litres: 2000.0,
         allowed_categories: ['dairy', 'plant-based', 'bakery'],
+        category_rules: {
+          dairy: {
+            category: 'dairy',
+            time_window: 'weekly',
+            max_storage_litres: 3000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          'plant-based': {
+            category: 'plant-based',
+            time_window: 'weekly',
+            max_storage_litres: 2000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          bakery: {
+            category: 'bakery',
+            time_window: 'weekly',
+            max_storage_litres: 2000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+        },
         anomaly_sensitivity_pct: 70,
         auto_dispute_enabled: true,
       },
@@ -875,11 +1020,13 @@ export class AimoGateStore {
     }
 
     const activeGrants = Array.from(this.grants.values()).filter((g) => g.tenant_id === tenantId);
-    const { passes, violations, matchingGrant } = evaluatePolicy({
+    const existingOrders = Array.from(this.orders.values()).filter((o) => o.tenant_id === tenantId);
+    const { passes, violations, matchingGrant } = evaluateOrderPolicy({
       policy,
       product,
       quote,
       activeGrants,
+      existingOrders,
       killswitchHalted: this.killswitchHalted,
       now,
     });
@@ -1101,7 +1248,17 @@ export class AimoGateStore {
   updatePolicy(
     principal: Principal,
     tenantId: string,
-    patch: Partial<Pick<TenantPolicy, 'max_auto_approve_eur' | 'max_auto_approve_litres' | 'allowed_categories' | 'anomaly_sensitivity_pct' | 'auto_dispute_enabled'>>
+    patch: Partial<
+      Pick<
+        TenantPolicy,
+        | 'max_auto_approve_eur'
+        | 'max_auto_approve_litres'
+        | 'allowed_categories'
+        | 'anomaly_sensitivity_pct'
+        | 'auto_dispute_enabled'
+        | 'category_rules'
+      >
+    >
   ): TenantPolicy {
     this.requirePrincipal(principal, ['human', 'admin'], ['policies:update']);
     const policy = this.policies.get(tenantId);
@@ -1110,10 +1267,36 @@ export class AimoGateStore {
     }
 
     if (patch.max_auto_approve_eur !== undefined) policy.max_auto_approve_eur = patch.max_auto_approve_eur;
-    if (patch.max_auto_approve_litres !== undefined) policy.max_auto_approve_litres = patch.max_auto_approve_litres;
+    if (patch.max_auto_approve_litres !== undefined) {
+      policy.max_auto_approve_litres = patch.max_auto_approve_litres;
+      if (policy.category_rules) {
+        for (const rule of Object.values(policy.category_rules)) {
+          if (rule.max_storage_litres < patch.max_auto_approve_litres) {
+            rule.max_storage_litres = patch.max_auto_approve_litres;
+          }
+        }
+      }
+    }
     if (patch.allowed_categories !== undefined) policy.allowed_categories = patch.allowed_categories;
     if (patch.anomaly_sensitivity_pct !== undefined) policy.anomaly_sensitivity_pct = patch.anomaly_sensitivity_pct;
     if (patch.auto_dispute_enabled !== undefined) policy.auto_dispute_enabled = patch.auto_dispute_enabled;
+    if (patch.category_rules !== undefined) {
+      if (!policy.category_rules) policy.category_rules = {};
+      for (const [catKey, rulePatch] of Object.entries(patch.category_rules)) {
+        const cat = catKey.toLowerCase();
+        const existing: CategoryRule = policy.category_rules[cat] || {
+          category: cat,
+          time_window: 'weekly',
+          max_storage_litres: policy.max_auto_approve_litres,
+          rule_valid_until: null,
+        };
+        policy.category_rules[cat] = {
+          ...existing,
+          ...rulePatch,
+          category: cat,
+        };
+      }
+    }
 
     this.addAuditLog({
       tenant_id: tenantId,
@@ -1124,10 +1307,138 @@ export class AimoGateStore {
         max_auto_approve_eur: policy.max_auto_approve_eur,
         max_auto_approve_litres: policy.max_auto_approve_litres,
         allowed_categories: policy.allowed_categories,
+        category_rules: policy.category_rules,
       },
     });
 
     return { ...policy };
+  }
+
+  getCategoryRulesWithUsage(tenantId: string, now: Date = new Date()): Record<string, CategoryRuleUsageDTO> {
+    const policy = this.policies.get(tenantId);
+    if (!policy) throw new GatewayError(404, `Policy for '${tenantId}' not found.`);
+
+    const rules = policy.category_rules || {};
+    const result: Record<string, CategoryRuleUsageDTO> = {};
+    const orders = Array.from(this.orders.values()).filter((o) => o.tenant_id === tenantId);
+
+    for (const cat of SYSTEM_CATEGORIES) {
+      const existing: CategoryRule = rules[cat] || {
+        category: cat,
+        time_window: 'weekly',
+        max_storage_litres: cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres,
+        rule_valid_until: null,
+      };
+
+      const durationMs = getTimeWindowDurationMs(existing.time_window);
+      let consumed = 0;
+      if (durationMs !== null) {
+        const windowStartMs = now.getTime() - durationMs;
+        for (const o of orders) {
+          if (o.status !== 'CONFIRMED') continue;
+          const oTime = new Date(o.created_at).getTime();
+          if (isNaN(oTime) || oTime < windowStartMs || oTime > now.getTime()) continue;
+          const oCat = (o.category || '').toLowerCase();
+          if (oCat === cat) {
+            consumed += Number(o.total_litres) || 0;
+          }
+        }
+      }
+
+      let isExpired = false;
+      let daysRemaining: number | null = null;
+      if (existing.rule_valid_until !== null && existing.rule_valid_until !== undefined) {
+        const untilDate = new Date(existing.rule_valid_until);
+        if (!isNaN(untilDate.getTime())) {
+          isExpired = now.getTime() > untilDate.getTime();
+          daysRemaining = Math.max(0, Math.ceil((untilDate.getTime() - now.getTime()) / 86400_000));
+        }
+      }
+
+      result[cat] = {
+        category: cat,
+        time_window: existing.time_window,
+        max_storage_litres: existing.max_storage_litres,
+        rule_valid_until: existing.rule_valid_until,
+        current_period_consumed_litres: Number(consumed.toFixed(1)),
+        is_expired: isExpired,
+        days_remaining: daysRemaining,
+      };
+    }
+
+    return result;
+  }
+
+  getCategoryRuleWithUsage(tenantId: string, category: string, now: Date = new Date()): CategoryRuleUsageDTO {
+    const all = this.getCategoryRulesWithUsage(tenantId, now);
+    const cat = category.toLowerCase();
+    if (all[cat]) return all[cat];
+    const policy = this.policies.get(tenantId);
+    if (!policy) throw new GatewayError(404, `Policy for '${tenantId}' not found.`);
+    return {
+      category: cat,
+      time_window: 'weekly',
+      max_storage_litres: policy.max_auto_approve_litres,
+      rule_valid_until: null,
+      current_period_consumed_litres: 0,
+      is_expired: false,
+      days_remaining: null,
+    };
+  }
+
+  updateCategoryRule(
+    principal: Principal,
+    tenantId: string,
+    category: string,
+    patch: Partial<Omit<CategoryRule, 'category'>>
+  ): CategoryRule {
+    this.requirePrincipal(principal, ['human', 'admin'], ['policies:update']);
+    const policy = this.policies.get(tenantId);
+    if (!policy) throw new GatewayError(404, `Policy for '${tenantId}' not found.`);
+
+    if (!policy.category_rules) policy.category_rules = {};
+    const cat = category.toLowerCase();
+    const existing: CategoryRule = policy.category_rules[cat] || {
+      category: cat,
+      time_window: 'weekly',
+      max_storage_litres: cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres,
+      rule_valid_until: null,
+    };
+
+    const validWindows: CategoryTimeWindow[] = ['weekly', 'daily', 'monthly', 'none'];
+    if (patch.time_window !== undefined && !validWindows.includes(patch.time_window)) {
+      throw new GatewayError(400, `Invalid time_window '${patch.time_window}'. Allowed: ${validWindows.join(', ')}`);
+    }
+
+    const updatedRule: CategoryRule = {
+      category: cat,
+      time_window: patch.time_window !== undefined ? patch.time_window : existing.time_window,
+      max_storage_litres:
+        patch.max_storage_litres !== undefined && !isNaN(Number(patch.max_storage_litres))
+          ? Number(patch.max_storage_litres)
+          : existing.max_storage_litres,
+      rule_valid_until:
+        patch.rule_valid_until !== undefined
+          ? patch.rule_valid_until
+          : existing.rule_valid_until,
+    };
+
+    policy.category_rules[cat] = updatedRule;
+
+    this.addAuditLog({
+      tenant_id: tenantId,
+      actor_type: principal.principal_type,
+      actor_id: principal.principal_id,
+      action: 'CATEGORY_RULE_UPDATED',
+      payload_summary: {
+        category: cat,
+        time_window: updatedRule.time_window,
+        max_storage_litres: updatedRule.max_storage_litres,
+        rule_valid_until: updatedRule.rule_valid_until,
+      },
+    });
+
+    return updatedRule;
   }
 
   updateCustomerGuardrails(tenantId: string, allowedCategories: string[]): GuardrailWhitelistDTO {
@@ -1153,6 +1464,7 @@ export class AimoGateStore {
     const allowed = policy.allowed_categories.map((c) => c.toLowerCase());
     const restricted = SYSTEM_CATEGORIES.filter((c) => !allowed.includes(c));
     const activeGrants = this.listGrants(tenantId, now).filter((g) => g.is_valid).length;
+    const categoryUsage = this.getCategoryRulesWithUsage(tenantId, now);
 
     return {
       tenant_id: policy.tenant_id,
@@ -1162,6 +1474,8 @@ export class AimoGateStore {
       restricted_categories: restricted,
       max_auto_approve_eur: policy.max_auto_approve_eur,
       active_grants_count: activeGrants,
+      category_rules: policy.category_rules,
+      category_usage: categoryUsage,
     };
   }
 

@@ -211,6 +211,24 @@ async function startServer() {
     })
   );
 
+  api.get(
+    '/policies/categories',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+      res.json(await store.getCategoryRules(targetTenant));
+    })
+  );
+
+  api.get(
+    '/policies/categories/:category',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+      res.json(await store.getCategoryRule(targetTenant, req.params.category));
+    })
+  );
+
   api.patch(
     '/policies',
     asyncHandler(async (req, res) => {
@@ -220,6 +238,16 @@ async function startServer() {
       res.json(updated);
     })
   );
+
+  const updateCategoryHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+    const updated = await store.updateCategoryRule(principal, targetTenant, req.params.category, req.body || {});
+    res.json(updated);
+  });
+
+  api.patch('/policies/categories/:category', updateCategoryHandler);
+  api.put('/policies/categories/:category', updateCategoryHandler);
 
   // --- Autonomous Buyer Agent & Scheduled Prompts ---
   api.post(
@@ -313,6 +341,22 @@ async function startServer() {
       res.json(await store.updateCustomerGuardrails(req.params.tenantId, allowed));
     })
   );
+
+  api.get(
+    '/admin/customers/:tenantId/categories',
+    asyncHandler(async (req, res) => {
+      res.json(await store.getCategoryRules(req.params.tenantId));
+    })
+  );
+
+  const adminUpdateCategoryHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    const updated = await store.updateCategoryRule(principal, req.params.tenantId, req.params.category, req.body || {});
+    res.json(updated);
+  });
+
+  api.put('/admin/customers/:tenantId/categories/:category', adminUpdateCategoryHandler);
+  api.patch('/admin/customers/:tenantId/categories/:category', adminUpdateCategoryHandler);
 
   api.get(
     '/admin/recurrent-grants',

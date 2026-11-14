@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AimoGateStore, GatewayError, DEFAULT_TENANT_ID } from './aimogate.ts';
+import { AimoGateStore, GatewayError, DEFAULT_TENANT_ID, evaluateOrderPolicy } from './aimogate.ts';
+import type { CategoryRule, TenantPolicy, Product, QuoteLock } from '../types/aimogate.ts';
 
 test('AC-1: search_offers returns unit-normalized offers and strips confidential & unreleased fields', () => {
   const store = new AimoGateStore();

@@ -9,6 +9,8 @@ import { adminDb } from './firebase-admin.ts';
 import type {
   AgentRunResponse,
   AuditLogEntry,
+  CategoryRule,
+  CategoryRuleUsageDTO,
   CustomerRosterItem,
   GuardrailWhitelistDTO,
   NetworkOverview,
@@ -234,6 +236,23 @@ export class PersistentAimoGateStore {
   async ensureLoaded(): Promise<void> {
     if (this.loadPromise) return this.loadPromise;
     this.loadPromise = (async () => {
+      const hasGcpCreds = Boolean(
+        process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+        process.env.K_SERVICE ||
+        process.env.FUNCTION_TARGET ||
+        process.env.FIRESTORE_EMULATOR_HOST
+      );
+      if (!hasGcpCreds) {
+        this.useLocalFallback = true;
+        this.persistenceBackend = 'local-fallback';
+        const local = await this.readLocalFallback();
+        if (local) {
+          this.applySnapshot(local);
+        } else {
+          await this.writeLocalFallback(this.exportSnapshot());
+        }
+        return;
+      }
       try {
         const existing = await this.readFullFromFirestore();
         if (existing) {
@@ -386,12 +405,30 @@ export class PersistentAimoGateStore {
     patch: Partial<
       Pick<
         TenantPolicy,
-        'max_auto_approve_eur' | 'max_auto_approve_litres' | 'allowed_categories' | 'anomaly_sensitivity_pct' | 'auto_dispute_enabled'
+        | 'max_auto_approve_eur'
+        | 'max_auto_approve_litres'
+        | 'allowed_categories'
+        | 'anomaly_sensitivity_pct'
+        | 'auto_dispute_enabled'
+        | 'category_rules'
       >
     >
   ): Promise<TenantPolicy> {
     return this.enqueue(async () => {
       const updated = this.engine.updatePolicy(principal, tenantId, patch);
+      await this.persistCurrentState();
+      return updated;
+    });
+  }
+
+  async updateCategoryRule(
+    principal: Principal,
+    tenantId: string,
+    category: string,
+    patch: Partial<Omit<CategoryRule, 'category'>>
+  ): Promise<CategoryRule> {
+    return this.enqueue(async () => {
+      const updated = this.engine.updateCategoryRule(principal, tenantId, category, patch);
       await this.persistCurrentState();
       return updated;
     });
@@ -521,6 +558,16 @@ export class PersistentAimoGateStore {
   async getCustomerGuardrails(tenantId: string): Promise<GuardrailWhitelistDTO> {
     await this.ensureLoaded();
     return this.engine.getCustomerGuardrails(tenantId);
+  }
+
+  async getCategoryRules(tenantId: string): Promise<Record<string, CategoryRuleUsageDTO>> {
+    await this.ensureLoaded();
+    return this.engine.getCategoryRulesWithUsage(tenantId);
+  }
+
+  async getCategoryRule(tenantId: string, category: string): Promise<CategoryRuleUsageDTO> {
+    await this.ensureLoaded();
+    return this.engine.getCategoryRuleWithUsage(tenantId, category);
   }
 
   async getSchedules(tenantId?: string): Promise<ScheduledPrompt[]> {
