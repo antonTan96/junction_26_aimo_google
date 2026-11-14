@@ -23,6 +23,8 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/server.ts ./
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/tsconfig.json ./
+COPY --from=builder /app/firebase-applet-config.json ./
+COPY --from=builder /app/firestore.rules ./
 
 # Install tsx globally or run via npx
 RUN npm install -g tsx
