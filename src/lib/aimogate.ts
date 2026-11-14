@@ -22,6 +22,7 @@ import type {
   WarehouseStock,
   ZeroTrustInspectResponse,
 } from '../types/aimogate.ts';
+import { ValioAimoCatalogService } from './valioAimoCatalog.ts';
 
 export const SYSTEM_CATEGORIES = [
   'dairy',
@@ -225,8 +226,8 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
   deliver_by: string;
 } {
   const text = prompt.toLowerCase();
-  const volMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:l|litres|liter|liters)\b/);
-  const qtyMatch = text.match(/([\d,]+)\s*(?:boxes|box|canisters|canister|packs|pack|units|croissants)\b/);
+  const volMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:l|litres|liter|liters|kg|kilo|kilos)\b/i);
+  const qtyMatch = text.match(/([\d,]+)\s*(?:boxes|box|canisters|canister|packs|pack|units|croissants|cases|cartons|bottles)\b/i);
 
   let volumeLitres = 1000.0;
   if (volMatch) {
@@ -235,18 +236,47 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
     volumeLitres = parseFloat(qtyMatch[1].replace(/,/g, '')) * 3.25;
   }
 
+  const attributes: string[] = [];
+  if (text.includes('lactose-free') || text.includes('lactose free') || text.includes('laktoositon')) {
+    attributes.push('lactose-free');
+  }
+  if (text.includes('vegan') || text.includes('plant-based') || text.includes('vegaani')) {
+    attributes.push('vegan');
+  }
+  if (text.includes('gluten-free') || text.includes('gluten free') || text.includes('gluteeniton')) {
+    attributes.push('gluten-free');
+  }
+
   let query = 'lactose-free milk';
   if (text.includes('croissant') || text.includes('bakery')) {
     query = 'croissant';
+  } else if (text.includes('butter') || text.includes('voi')) {
+    query = 'cooking butter';
+  } else if (text.includes('espresso') || text.includes('coffee') || text.includes('kahvi')) {
+    query = 'espresso beans';
+  } else if (text.includes('lactose-free milk') || text.includes('lactose free milk')) {
+    query = 'lactose-free milk';
   } else if (text.includes('sanitizer') || text.includes('hygiene') || text.includes('clean')) {
     query = 'sanitizer';
-  } else if (text.includes('oat')) {
+  } else if (text.includes('oat') || text.includes('oddlygood') || text.includes('kaura')) {
     query = 'oat';
   } else if (text.includes('dairy') || text.includes('milk')) {
     query = 'lactose-free milk';
-  }
+  } else {
+    // Dynamic query extraction from user prompt
+    let cleaned = text
+      .replace(/^(please\s+)?(can you\s+)?(order|buy|purchase|deliver|we need|restock|get us|i need|send)\s+/i, '')
+      .replace(/([\d,]+(?:\.\d+)?)\s*(?:l|litres|liter|liters|kg|kilo|kilos|boxes|box|canisters|canister|packs|pack|units|croissants|cases|cartons|bottles)\b/gi, '')
+      .replace(/\b(of|for|by|until|before)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|asap|today)\b/gi, '')
+      .replace(/\b(by|before|until)\s+[\w\d\s,.-]+$/i, '')
+      .replace(/\b(find an option.*|check (price|availability).*)\b/gi, '')
+      .replace(/\b(for our kitchen|for the restaurant|for the cafeteria|urgent|urgently)\b/gi, '')
+      .replace(/^of\s+/i, '')
+      .replace(/[.,;!?]+$/, '')
+      .trim();
 
-  const attributes = text.includes('lactose') || text.includes('free') ? ['lactose-free'] : [];
+    query = cleaned || 'lactose-free milk';
+  }
 
   const weekday = now.getUTCDay(); // 0=Sun, 1=Mon
   let daysAhead = (1 - weekday + 7) % 7;
@@ -887,6 +917,86 @@ export class AimoGateStore {
         lead_time_feasible: leadTimeFeasible,
         earliest_delivery: earliestDelivery.toISOString(),
       });
+    }
+
+    // If no hardcoded products match, retrieve candidates dynamically from the 17,546 Valio Aimo catalog
+    if (offers.length === 0 && searchTerm) {
+      const catalogService = ValioAimoCatalogService.getInstance();
+      const candidates = catalogService.search(searchTerm, { tags: req.attributes, limit: 6 });
+
+      for (const cand of candidates) {
+        const dynamicSku = `VA-${cand.id}`;
+
+        if (!this.products.has(dynamicSku)) {
+          this.products.set(dynamicSku, {
+            sku: dynamicSku,
+            name: cand.display_name,
+            category: cand.category,
+            dietary_tags: cand.dietary_tags,
+            pack_format: cand.pack_format,
+            pack_volume_litres: cand.pack_volume_litres,
+            min_lead_time_hours: 24,
+            is_active: true,
+            internal_cost_eur: 10.0,
+            internal_margin_pct: 18.0,
+            roadmap_status: 'LIVE',
+          });
+        }
+
+        if (!this.stock.has(dynamicSku)) {
+          this.stock.set(dynamicSku, {
+            sku: dynamicSku,
+            available_packs: 500,
+            reserved_packs: 0,
+          });
+        }
+
+        // Establish contract price if not already set
+        const priceKey = `${tenantId}::${dynamicSku}`;
+        if (!this.contractPrices.has(priceKey)) {
+          // Estimate baseline contract price if live call is deferred
+          const estimatedPrice = cand.pack_volume_litres >= 10 ? 12.5 : cand.pack_volume_litres >= 1 ? 2.4 : 1.95;
+          this.contractPrices.set(priceKey, estimatedPrice);
+        }
+
+        const unitPrice = this.contractPrices.get(priceKey)!;
+        const packVol = cand.pack_volume_litres || 1.0;
+        const pricePerLitre = Number((unitPrice / packVol).toFixed(2));
+        let packsRequired: number | null = null;
+        let deliveredVol: number | null = null;
+        let totalPrice: number | null = null;
+
+        if (req.required_volume_litres !== undefined && req.required_volume_litres > 0) {
+          packsRequired = Math.ceil(req.required_volume_litres / packVol);
+          deliveredVol = Number((packsRequired * packVol).toFixed(2));
+          totalPrice = Number((packsRequired * unitPrice).toFixed(2));
+        }
+
+        const earliestDelivery = new Date(now.getTime() + 24 * 3600_000);
+        let leadTimeFeasible = true;
+        if (req.deliver_by) {
+          const target = new Date(req.deliver_by);
+          leadTimeFeasible = target >= earliestDelivery;
+        }
+
+        offers.push({
+          sku: dynamicSku,
+          name: cand.display_name,
+          category: cand.category,
+          dietary_tags: [...cand.dietary_tags],
+          pack_format: cand.pack_format,
+          pack_volume_litres: packVol,
+          unit_contract_price_eur: unitPrice,
+          price_per_litre_eur: pricePerLitre,
+          packs_required: packsRequired,
+          delivered_volume_litres: deliveredVol,
+          total_contract_price_eur: totalPrice,
+          is_stock_available: true,
+          available_packs: 500,
+          lead_time_feasible: leadTimeFeasible,
+          earliest_delivery: earliestDelivery.toISOString(),
+        });
+      }
     }
 
     offers.sort((a, b) => {

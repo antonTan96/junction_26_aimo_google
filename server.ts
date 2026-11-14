@@ -8,6 +8,9 @@ import {
   GatewayError,
   SYSTEM_CATEGORIES,
 } from './src/lib/aimogate.ts';
+import { ValioAimoCatalogService } from './src/lib/valioAimoCatalog.ts';
+import { ValioAimoRAGService } from './src/lib/valioAimoRAG.ts';
+import { MariaDBCatalogClient } from './src/lib/mariadbCatalog.ts';
 import { PersistentAimoGateStore } from './src/lib/firestoreStore.ts';
 import { createAimoGateMcpServer } from './src/lib/mcpServer.ts';
 import type { Principal, PrincipalType } from './src/types/aimogate.ts';
@@ -257,6 +260,43 @@ async function startServer() {
     })
   );
 
+  api.post(
+    '/agent/run-rag',
+    asyncHandler(async (req, res) => {
+      const tenantId = req.body?.tenant_id || DEFAULT_TENANT_ID;
+      const policy = await store.getPolicy(tenantId);
+      const orders = await store.getOrders(tenantId);
+      const ragService = ValioAimoRAGService.getInstance();
+      const result = await ragService.executeRAGPipeline({
+        prompt: req.body?.prompt || 'Order dairy supplies',
+        policy,
+        existingOrders: orders,
+        customer: req.body?.customer || '123',
+      });
+
+      if (result.agentResponse.order && result.quoteLocked) {
+        store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
+        store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
+        store.engine.addAuditLog({
+          tenant_id: tenantId,
+          actor_type: 'agent',
+          actor_id: `rag_agent_${tenantId}`,
+          action: 'RAG_ORDER_PROPOSAL',
+          payload_summary: {
+            prompt: req.body?.prompt,
+            sku: result.selectedProduct?.product.id,
+            name: result.selectedProduct?.product.display_name,
+            total_eur: result.selectedProduct?.totalCostEur,
+            verdict: result.policyResult.passes ? 'AUTO_APPROVED' : 'PENDING_APPROVAL',
+          },
+        });
+        await store.persist();
+      }
+
+      res.json(result);
+    })
+  );
+
   api.get(
     '/schedules',
     asyncHandler(async (req, res) => {
@@ -305,6 +345,84 @@ async function startServer() {
     '/demo/stock',
     asyncHandler(async (_req, res) => {
       res.json(await store.getStockSummary());
+    })
+  );
+
+  // --- Valio Aimo Live Catalog & RAG Discovery Routes ---
+  api.get(
+    '/catalog/status',
+    asyncHandler(async (_req, res) => {
+      const mariaDb = MariaDBCatalogClient.getInstance();
+      const service = ValioAimoCatalogService.getInstance();
+      const memCount = service.getProductCount();
+      const mariaCount = await mariaDb.getProductCount();
+
+      res.json({
+        backend: mariaDb.isAvailable() ? 'mariadb' : 'in-memory-json',
+        catalog_items: mariaCount ?? memCount,
+        source_dataset: 'valio_aimo_junction26_product_data.json (17,546 SKUs)',
+        rag_enabled: true,
+        upstream_api: {
+          base_url: 'https://junction26.valioaimo.fi',
+          endpoints: ['/api/ping', '/api/price', '/api/availability'],
+          live_sync_enabled: true,
+        },
+        mariadb: {
+          connected: mariaDb.isAvailable(),
+          host: process.env.MARIADB_HOST || '127.0.0.1',
+          port: Number(process.env.MARIADB_PORT || 3306),
+          database: process.env.MARIADB_DATABASE || 'aimogate',
+        },
+      });
+    })
+  );
+
+  api.get(
+    '/catalog/search',
+    asyncHandler(async (req, res) => {
+      const q = typeof req.query.q === 'string' ? req.query.q : '';
+      const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+      const tag = typeof req.query.tag === 'string' ? [req.query.tag] : undefined;
+      const limit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : 24;
+
+      const service = ValioAimoCatalogService.getInstance();
+      const mariaDb = MariaDBCatalogClient.getInstance();
+
+      let products = await mariaDb.searchProducts(q, { category, tags: tag, limit });
+      const backendUsed = products !== null ? 'mariadb' : 'in-memory-json';
+      if (!products) {
+        products = service.search(q, { category, tags: tag, limit });
+      }
+
+      res.json({
+        total: products.length,
+        catalog_size: service.getProductCount(),
+        backend: backendUsed,
+        products,
+      });
+    })
+  );
+
+  api.get(
+    '/catalog/product/:id',
+    asyncHandler(async (req, res) => {
+      const service = ValioAimoCatalogService.getInstance();
+      const product = service.getProductById(req.params.id);
+      if (!product) {
+        throw new GatewayError(404, `Product '${req.params.id}' not found in Valio Aimo catalog.`);
+      }
+
+      // Query live price and stock on-demand
+      const [prices, stock] = await Promise.all([
+        service.fetchLivePrices([product.id]),
+        service.fetchLiveAvailability([product.id]),
+      ]);
+
+      res.json({
+        product,
+        live_price: prices.get(product.id) || null,
+        live_stock: stock.get(product.id) || null,
+      });
     })
   );
 

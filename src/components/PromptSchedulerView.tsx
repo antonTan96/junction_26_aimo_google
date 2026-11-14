@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ShoppingBag,
   Gavel,
@@ -10,9 +10,17 @@ import {
   ChevronDown,
   ChevronRight,
   PackageCheck,
+  Search,
+  Sparkles,
+  Filter,
+  ArrowRight,
+  Tag,
+  Plus,
+  Loader2,
 } from 'lucide-react';
 import type {
   AgentRunResponse,
+  CatalogProduct,
   CustomerRosterItem,
   OrderDTO,
   RecurrentApprovalGrant,
@@ -65,16 +73,28 @@ const SCENARIO_PRESETS = [
       'I need 400 litres of lactose-free milk by Monday. Find an option that meets our requirements based on price and availability.',
   },
   {
-    label: '20 Boxes Croissants',
-    note: 'Bakery category',
+    label: '20kg Cooking Butter',
+    note: 'Valio Voi staple',
     prompt:
-      'I need 20 boxes of artisanal butter croissants by Monday. Find an option based on price and availability.',
+      'We need 20kg of traditional cooking butter by Friday. Find an option based on price and availability.',
+  },
+  {
+    label: '10kg Espresso Beans',
+    note: 'Paulig coffee beans',
+    prompt:
+      'Purchase 10kg of Paulig espresso coffee beans for the cafeteria by Monday.',
   },
   {
     label: '200L Barista Oat Drink',
     note: 'Plant-based dairy',
     prompt:
       'I need 200 litres of barista oat drink by Monday. Find an option based on price and availability.',
+  },
+  {
+    label: '20 Boxes Croissants',
+    note: 'Bakery category',
+    prompt:
+      'I need 20 boxes of artisanal butter croissants by Monday. Find an option based on price and availability.',
   },
 ];
 
@@ -109,6 +129,41 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
   const [recurrentBudget, setRecurrentBudget] = useState(3000);
   const [showWindowOptions, setShowWindowOptions] = useState(false);
   const [showTraceDetails, setShowTraceDetails] = useState(false);
+
+  // Catalog Explorer & RAG Search state
+  const [catalogSearch, setCatalogSearch] = useState('');
+  const [catalogCategory, setCatalogCategory] = useState('all');
+  const [catalogItems, setCatalogItems] = useState<CatalogProduct[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(17546);
+  const [catalogBackend, setCatalogBackend] = useState<'mariadb' | 'in-memory-json'>('in-memory-json');
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setIsLoadingCatalog(true);
+      try {
+        const catParam = catalogCategory !== 'all' ? `&category=${catalogCategory}` : '';
+        const qParam = catalogSearch ? `&q=${encodeURIComponent(catalogSearch)}` : '';
+        const res = await fetch(`/api/v1/catalog/search?limit=6${catParam}${qParam}`);
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setCatalogItems(data.products || []);
+          if (data.catalog_size) setCatalogTotal(data.catalog_size);
+          if (data.backend) setCatalogBackend(data.backend);
+        }
+      } catch (err) {
+        console.warn('Catalog search error:', err);
+      } finally {
+        if (!cancelled) setIsLoadingCatalog(false);
+      }
+    }, 200);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [catalogSearch, catalogCategory]);
 
   const currentCustomer = customers.find((c) => c.tenant_id === selectedTenant) || customers[0];
 
@@ -620,6 +675,122 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                         .replace('Trigger: Inventory < 40 packs', 'Auto-orders when below 40 boxes')
                         .replace('Tue & Fri 02:00 UTC', 'Every Tuesday & Friday at 02:00')}
                     </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Valio Aimo Catalog & RAG Explorer */}
+          <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/50 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <Sparkles className="w-5 h-5 text-primary shrink-0" />
+                <h2 className="text-base font-semibold text-on-surface font-headline">
+                  Valio Aimo Catalog &amp; RAG
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/10 text-primary border border-primary/20">
+                  {catalogBackend === 'mariadb' ? 'MariaDB Active' : 'RAG Indexed'} · {catalogTotal.toLocaleString()} SKUs
+                </span>
+              </div>
+            </div>
+
+            <p className="text-xs text-on-surface-variant">
+              Live retrieval over the official Junction 2026 Valio Aimo catalog. Click any item to ground your AI prompt.
+            </p>
+
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-on-surface-variant absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={catalogSearch}
+                onChange={(e) => setCatalogSearch(e.target.value)}
+                placeholder="Search butter, lactose-free milk, coffee, croissants..."
+                className="w-full pl-9 pr-8 py-2 rounded-xl bg-surface-container-lowest border border-outline-variant/50 text-xs text-on-surface placeholder:text-on-surface-variant/60 focus:outline-none focus:border-primary/50"
+              />
+              {catalogSearch && (
+                <button
+                  type="button"
+                  onClick={() => setCatalogSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-on-surface-variant hover:text-on-surface cursor-pointer"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Category Filter Pills */}
+            <div className="flex flex-wrap gap-1.5 pt-0.5">
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'dairy', label: 'Dairy' },
+                { id: 'plant-based', label: 'Plant-Based' },
+                { id: 'bakery', label: 'Bakery' },
+                { id: 'beverages', label: 'Beverages' },
+                { id: 'cleaning', label: 'Cleaning' },
+                { id: 'meat', label: 'Meat' },
+              ].map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setCatalogCategory(c.id)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                    catalogCategory === c.id
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-surface-container-high text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Catalog Items List */}
+            {isLoadingCatalog ? (
+              <div className="py-8 flex flex-col items-center justify-center gap-2 text-on-surface-variant text-xs">
+                <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                <span>Searching catalog...</span>
+              </div>
+            ) : catalogItems.length === 0 ? (
+              <div className="py-6 text-center text-xs text-on-surface-variant bg-surface-container-lowest rounded-xl border border-outline-variant/30">
+                No matching catalog items found. Try another search term.
+              </div>
+            ) : (
+              <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
+                {catalogItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="p-3 rounded-xl bg-surface-container-lowest border border-outline-variant/40 hover:border-primary/40 transition-colors flex items-start justify-between gap-3"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="text-xs font-medium text-on-surface leading-tight line-clamp-1">
+                        {item.display_name}
+                      </div>
+                      <div className="text-[11px] text-on-surface-variant line-clamp-1">
+                        {item.name_fi !== item.display_name ? `${item.name_fi} · ` : ''}
+                        <span className="capitalize">{item.category}</span> · {item.pack_format}
+                      </div>
+                      {item.brand && (
+                        <span className="inline-block px-1.5 py-0.5 rounded text-[10px] bg-surface-container-high text-on-surface-variant">
+                          {item.brand}
+                        </span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newPrompt = `Order 20 units of ${item.display_name} (${item.pack_format}) by Monday. Check price and warehouse availability.`;
+                        setPrompt(newPrompt);
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-surface-container-high hover:bg-primary hover:text-on-primary text-xs font-medium text-primary transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 cursor-pointer"
+                      title="Ground AI order prompt with this product"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Use</span>
+                    </button>
                   </div>
                 ))}
               </div>

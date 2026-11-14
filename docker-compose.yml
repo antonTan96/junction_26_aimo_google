@@ -1,0 +1,49 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: aimogate-mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: root_password_junction26
+      MARIADB_DATABASE: aimogate
+      MARIADB_USER: aimo_user
+      MARIADB_PASSWORD: aimo_secure_password_2026
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  aimogate-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aimogate-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      NODE_ENV: production
+      MARIADB_HOST: mariadb
+      MARIADB_PORT: "3306"
+      MARIADB_DATABASE: aimogate
+      MARIADB_USER: aimo_user
+      MARIADB_PASSWORD: aimo_secure_password_2026
+      VALIO_API_BASE_URL: https://junction26.valioaimo.fi
+      VALIO_API_KEY: junct_tDnQn4VI_nfhELGCOEkY4vbuxm324MmYmILuokYG03Y
+      VALIO_CATALOG_PATH: /app/data/valio_aimo_junction26_product_data.json
+    volumes:
+      - ../junction26_aimo/valio_aimo_junction26_product_data.json:/app/data/valio_aimo_junction26_product_data.json:ro
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+volumes:
+  mariadb_data:
+    driver: local

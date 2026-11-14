@@ -280,3 +280,22 @@ export type NavSectionId =
   | 'autonomous-prompt-scheduler'
   | 'safety-and-budget-limits'
   | 'audit-and-agent-logs';
+
+export interface CatalogProduct {
+  id: string;
+  gtin: string;
+  name_fi: string;
+  name_en: string;
+  name_sv: string;
+  display_name: string;
+  vendor_name: string;
+  brand: string;
+  category: string;
+  dietary_tags: string[];
+  pack_format: string;
+  pack_volume_litres: number;
+  temperature_condition: number;
+  search_corpus: string;
+  is_active: boolean;
+  base_price_eur?: number;
+}

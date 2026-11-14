@@ -511,6 +511,12 @@ export class PersistentAimoGateStore {
     });
   }
 
+  async persist(): Promise<void> {
+    return this.enqueue(async () => {
+      await this.persistCurrentState();
+    });
+  }
+
   async reset(): Promise<void> {
     return this.enqueue(async () => {
       this.engine.reset();
