@@ -256,7 +256,45 @@ async function startServer() {
   api.post(
     '/agent/run',
     asyncHandler(async (req, res) => {
-      res.json(await store.runAgentWorkflow(req.body || {}));
+      const mode = req.body?.mode;
+      if (mode === 'deterministic') {
+        res.json(await store.runAgentWorkflow(req.body || {}));
+        return;
+      }
+
+      // Default to NVIDIA Nemotron-3.5-Super-VL RAG pipeline
+      const tenantId = req.body?.tenant_id || DEFAULT_TENANT_ID;
+      const policy = await store.getPolicy(tenantId);
+      const orders = await store.getOrders(tenantId);
+      const ragService = ValioAimoRAGService.getInstance();
+      const result = await ragService.executeRAGPipeline({
+        prompt: req.body?.prompt || 'Order dairy supplies',
+        policy,
+        existingOrders: orders,
+        customer: req.body?.customer || '123',
+      });
+
+      if (result.agentResponse.order && result.quoteLocked) {
+        store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
+        store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
+        store.engine.addAuditLog({
+          tenant_id: tenantId,
+          actor_type: 'agent',
+          actor_id: `nemotron_agent_${tenantId}`,
+          action: 'NEMOTRON_RAG_ORDER',
+          payload_summary: {
+            prompt: req.body?.prompt,
+            model: 'nemotron-3.5-super-vl',
+            sku: result.selectedProduct?.product.id,
+            name: result.selectedProduct?.product.display_name,
+            total_eur: result.selectedProduct?.totalCostEur,
+            verdict: result.policyResult.passes ? 'AUTO_APPROVED' : 'PENDING_APPROVAL',
+          },
+        });
+        await store.persist();
+      }
+
+      res.json(result.agentResponse);
     })
   );
 
@@ -362,6 +400,12 @@ async function startServer() {
         catalog_items: mariaCount ?? memCount,
         source_dataset: 'valio_aimo_junction26_product_data.json (17,546 SKUs)',
         rag_enabled: true,
+        llm: {
+          model: 'nemotron-3.5-super-vl',
+          provider: 'DataCrunch B300 (vLLM)',
+          endpoint: 'https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1',
+          architecture: 'NVIDIA Nemotron-3.5-Super-VL 120B (A12B NVFP4)',
+        },
         upstream_api: {
           base_url: 'https://junction26.valioaimo.fi',
           endpoints: ['/api/ping', '/api/price', '/api/availability'],

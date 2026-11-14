@@ -208,12 +208,16 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
         {/* Left: Place an Order */}
         <div className="lg:col-span-7 flex flex-col gap-6">
           <div className="p-6 rounded-2xl bg-surface-container border border-outline-variant/50 space-y-6">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <ShoppingBag className="w-5 h-5 text-primary shrink-0" />
                 <h2 className="text-base font-semibold text-on-surface font-headline">
                   Place a Kitchen Order
                 </h2>
+              </div>
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-[11px] font-medium text-primary border border-primary/20">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>NVIDIA Nemotron 3.5 Super VL</span>
               </div>
             </div>
 

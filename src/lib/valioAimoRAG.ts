@@ -1,4 +1,5 @@
 import { ValioAimoCatalogService, type CatalogProduct } from './valioAimoCatalog.ts';
+import { NemotronClient } from './nemotronClient.ts';
 import {
   parseBuyerPrompt,
   evaluateOrderPolicy,
@@ -178,22 +179,47 @@ export class ValioAimoRAGService {
       })),
     });
 
-    // Step 3: Synthesis & Selection (Optimal Unit Cost + Stock Feasibility)
-    const availableCandidates = candidateContexts.filter((c) => c.isAvailable && c.availablePacks >= c.packsRequired);
-    const pool = availableCandidates.length > 0 ? availableCandidates : candidateContexts;
+    // Step 3: Synthesis & Selection using NVIDIA Nemotron 3.5 Super VL (DataCrunch B300)
+    const nemotron = NemotronClient.getInstance();
+    const nemotronDecision = await nemotron.reasonProcurement({
+      prompt,
+      candidates: candidateContexts,
+      policy,
+      requiredVolume: parsed.volume_litres,
+    });
 
-    // Sort by comparison price ascending (best unit economics)
-    pool.sort((a, b) => a.comparisonPriceEur - b.comparisonPriceEur || a.totalCostEur - b.totalCostEur);
-    const selected = pool[0];
+    let selected: RAGProductContext;
+    let selectedPacks = 1;
+    let selectedCost = 0;
+    let aiExplanation = '';
+    let chainOfThought: string | undefined = undefined;
+
+    if (nemotronDecision) {
+      const match = candidateContexts.find((c) => c.product.id === nemotronDecision.selectedSku);
+      selected = match || candidateContexts[0];
+      selectedPacks = nemotronDecision.packsToOrder || selected.packsRequired;
+      selectedCost = nemotronDecision.totalCostEur || Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
+      aiExplanation = nemotronDecision.reasoning;
+      chainOfThought = nemotronDecision.chainOfThought;
+    } else {
+      // Deterministic unit-economics fallback
+      const availableCandidates = candidateContexts.filter((c) => c.isAvailable && c.availablePacks >= c.packsRequired);
+      const pool = availableCandidates.length > 0 ? availableCandidates : candidateContexts;
+      pool.sort((a, b) => a.comparisonPriceEur - b.comparisonPriceEur || a.totalCostEur - b.totalCostEur);
+      selected = pool[0];
+      selectedPacks = selected.packsRequired;
+      selectedCost = selected.totalCostEur;
+      aiExplanation = `Selected SKU ${selected.product.id} (${selected.product.display_name}) with lowest unit cost €${selected.comparisonPriceEur}/${selected.comparisonUnit}.`;
+    }
 
     // Step 4: Policy & Guardrail Verification
     const mockQuote: QuoteLock = {
       quote_id: `quote_rag_${Date.now()}`,
       tenant_id: policy.tenant_id,
       sku: selected.product.id,
-      pack_quantity: selected.packsRequired,
-      locked_total_eur: selected.totalCostEur,
-      total_litres: selected.packsRequired * selected.product.pack_volume_litres,
+      pack_quantity: selectedPacks,
+      locked_total_eur: selectedCost,
+      total_litres: selectedPacks * selected.product.pack_volume_litres,
       deliver_by: parsed.deliver_by,
       status: 'LOCKED',
       expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
@@ -224,32 +250,34 @@ export class ValioAimoRAGService {
 
     traces.push({
       step_number: 3,
-      title: 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
-      description: `RAG model selected '${selected.product.display_name}' (${selected.product.pack_format}) at €${selected.comparisonPriceEur}/${selected.comparisonUnit}. Total: €${selected.totalCostEur.toFixed(2)} (${selected.packsRequired} packs). Policy check: ${policyEval.passes ? 'PASSED (Auto-Approve)' : `REQUIRES SIGN-OFF (${policyEval.violations.join('; ')})`}.`,
+      title: nemotronDecision
+        ? 'RAG Step 3: NVIDIA Nemotron-3.5-Super-VL Reasoning (DataCrunch B300)'
+        : 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
+      description: `${aiExplanation} Policy evaluation: ${policyEval.passes ? 'PASSED (Auto-Approve)' : `REQUIRES SIGN-OFF (${policyEval.violations.join('; ')})`}.`,
       action_type: 'reasoning',
-      latency_ms: 12,
+      latency_ms: nemotronDecision?.latencyMs || 12,
       tool_output: {
+        model: nemotronDecision?.model || 'deterministic-solver',
         selected_sku: selected.product.id,
-        total_eur: selected.totalCostEur,
+        total_eur: selectedCost,
         unit_price: selected.comparisonPriceEur,
         policy_passes: policyEval.passes,
         violations: policyEval.violations,
+        chain_of_thought: chainOfThought,
       },
     });
 
     const isAutoApproved = policyEval.passes;
     const finalStatus = isAutoApproved ? 'CONFIRMED' : 'PENDING_APPROVAL';
 
-    const explanation = `RAG Pipeline synthesized requirement: ${parsed.volume_litres}L of ${selected.product.display_name}. ` +
-      `Retrieved 17,546 catalog items, validated live inventory (${selected.availablePacks} packs in warehouse), ` +
-      `and confirmed optimal unit economics (€${selected.comparisonPriceEur}/${selected.comparisonUnit}). ` +
+    const explanation = `${aiExplanation} ` +
       (isAutoApproved
-        ? `Order (€${selected.totalCostEur.toFixed(2)}) is within the €${policy.max_auto_approve_eur} threshold and satisfies category rules. Order AUTO-APPROVED.`
-        : `Order (€${selected.totalCostEur.toFixed(2)}) flagged for manager approval: ${policyEval.violations.join('. ')}.`);
+        ? `Order (€${selectedCost.toFixed(2)}) is within the €${policy.max_auto_approve_eur} threshold and satisfies category rules. Order AUTO-APPROVED.`
+        : `Order (€${selectedCost.toFixed(2)}) flagged for manager approval: ${policyEval.violations.join('. ')}.`);
 
     const agentResponse: AgentRunResponse = {
       success: true,
-      mode_used: 'rag-augmented',
+      mode_used: nemotronDecision ? 'nemotron-3.5-super-vl' : 'rag-augmented',
       execution_time_ms: Date.now() - t0,
       traces,
       final_status: finalStatus,
@@ -262,9 +290,9 @@ export class ValioAimoRAGService {
         sku: selected.product.id,
         product_name: selected.product.display_name,
         category: selected.product.category,
-        pack_quantity: selected.packsRequired,
-        total_litres: selected.packsRequired * selected.product.pack_volume_litres,
-        total_eur: selected.totalCostEur,
+        pack_quantity: selectedPacks,
+        total_litres: selectedPacks * selected.product.pack_volume_litres,
+        total_eur: selectedCost,
         status: isAutoApproved ? 'CONFIRMED' : 'PENDING_APPROVAL',
         approval_type: isAutoApproved ? 'AUTO' : 'PENDING',
         approved_by: isAutoApproved ? 'AimoGate Policy Engine (Auto)' : null,
