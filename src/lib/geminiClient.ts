@@ -112,9 +112,9 @@ export class GeminiClient {
     if (!this.client) return null;
 
     const executeModels = async () => {
-      const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-pro-latest'];
+      const candidateModels = [this.model, 'gemini-flash-latest'];
       const uniqueModels = Array.from(new Set(candidateModels.filter(Boolean)));
-      const modelTimeoutMs = 25000;
+      const modelTimeoutMs = 3500;
 
       for (const model of uniqueModels) {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -169,7 +169,7 @@ export class GeminiClient {
     };
 
     let overallTimer: ReturnType<typeof setTimeout> | undefined;
-    const overallTimeoutMs = 30000;
+    const overallTimeoutMs = 4500;
     const overallTimeoutPromise = new Promise<null>((resolve) => {
       overallTimer = setTimeout(() => {
         console.warn(`[GeminiClient] Total generateContentWithFallback timed out after ${overallTimeoutMs}ms, falling back.`);

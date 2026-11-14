@@ -775,14 +775,28 @@ export class ValioAimoRAGService {
       })),
     });
 
-    // Step 3: Synthesis & Selection using Google Gemini (or fallback to Deterministic)
+    // Step 3: Synthesis & Selection using Google Gemini (or fast fallback to Deterministic)
     const gemini = GeminiClient.getInstance();
-    const geminiDecision = await gemini.reasonProcurement({
-      prompt,
-      candidates: candidateContexts,
-      policy,
-      requiredVolume: parsed.volume_litres,
-    });
+    let geminiDecision = null;
+    if (gemini.isAvailable() && candidateContexts.length > 1) {
+      try {
+        const timeoutPromise = new Promise<null>((resolve) => {
+          const t = setTimeout(() => resolve(null), 2500);
+          if (typeof (t as any)?.unref === 'function') (t as any).unref();
+        });
+        geminiDecision = await Promise.race([
+          gemini.reasonProcurement({
+            prompt,
+            candidates: candidateContexts,
+            policy,
+            requiredVolume: parsed.volume_litres,
+          }),
+          timeoutPromise,
+        ]);
+      } catch {
+        geminiDecision = null;
+      }
+    }
 
     let selected: RAGProductContext;
     let selectedPacks = 1;

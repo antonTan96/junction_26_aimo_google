@@ -1070,18 +1070,52 @@ export function preprocessBuyerPromptSync(
   };
 }
 
+function isHighConfidenceSyncResult(res: PreprocessedPromptResult, prompt: string): boolean {
+  // Informational inquiries (stock, price, policy, recipe questions)
+  if (res.detected_intent) return true;
+  // Recognized culinary dish from database or reverse signature
+  if (res.request_type === 'recipe' && res.recipe) return true;
+  // Decomposed multi-item list
+  if (res.items.length > 1) return true;
+  // Adversarial override attempt
+  if (
+    res.notes?.includes('Adversarial') ||
+    /\b(?:system\s+override|ignore\s+(?:spend\s+)?limits|bypass\s+policy|override\s+policy)\b/i.test(prompt)
+  ) {
+    return true;
+  }
+  // Standard single commodity with recognized metric quantity & clean query
+  if (res.items.length === 1) {
+    const item = res.items[0];
+    if (
+      item &&
+      (item.quantity > 1 || item.unit === 'L' || item.unit === 'kg' || item.unit === 'boxes' || item.unit === 'packs') &&
+      item.ingredient_name !== prompt.trim()
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Preprocess natural language buyer prompts into structured procurement items,
  * identifying recipes, deducing necessary raw materials, and scaling quantities.
- * Async wrapper with Google Gemini unified culinary reasoning for open-ended uncataloged recipes.
+ * Async wrapper with fast-path deterministic bypass and Google Gemini culinary reasoning for open-ended uncataloged recipes.
  */
 export async function preprocessBuyerPrompt(
   prompt: string,
   now: Date = new Date()
 ): Promise<PreprocessedPromptResult> {
   const deliverBy = calculateDefaultDeliverBy(now);
+  const syncResult = preprocessBuyerPromptSync(prompt, now);
 
-  // 1. Google Gemini Unified Procurement & Culinary Analysis
+  // Fast-path: If deterministic local preprocessor has high confidence, return immediately in <1ms!
+  if (isHighConfidenceSyncResult(syncResult, prompt)) {
+    return syncResult;
+  }
+
+  // Fall back to Google Gemini Unified Procurement & Culinary Analysis for novel/uncataloged culinary requests
   if (process.env.DISABLE_REMOTE_LLM !== 'true') {
     try {
       const gemini = GeminiClient.getInstance();
@@ -1157,6 +1191,5 @@ export async function preprocessBuyerPrompt(
     }
   }
 
-  const syncResult = preprocessBuyerPromptSync(prompt, now);
   return syncResult;
 }

@@ -150,6 +150,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
 }) => {
   const [workflowName, setWorkflowName] = useState('Monday Milk Delivery');
   const [prompt, setPrompt] = useState(SCENARIO_PRESETS[0].prompt);
+  const [execMode, setExecMode] = useState<'deterministic' | 'rag'>('deterministic');
   const [strategy, setStrategy] = useState<'one-time' | 'cron' | 'threshold'>('one-time');
   const [cronExpr, setCronExpr] = useState('0 2 * * 2,5');
   const [approvalWindowDays, setApprovalWindowDays] = useState(7);
@@ -243,9 +244,32 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                   Place a Kitchen Order
                 </h2>
               </div>
-              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-[11px] font-medium text-primary border border-primary/20">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Google Gemini Flash</span>
+              <div className="flex items-center gap-1 p-0.5 rounded-lg bg-surface-container-lowest border border-outline-variant/40 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => setExecMode('deterministic')}
+                  className={`px-2.5 py-1 rounded-md font-medium transition-colors cursor-pointer ${
+                    execMode === 'deterministic'
+                      ? 'bg-primary text-on-primary shadow-xs'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                  title="Instant deterministic execution (<25ms)"
+                >
+                  Deterministic (&lt;25ms)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExecMode('rag')}
+                  className={`px-2.5 py-1 rounded-md font-medium flex items-center gap-1 transition-colors cursor-pointer ${
+                    execMode === 'rag'
+                      ? 'bg-primary text-on-primary shadow-xs'
+                      : 'text-on-surface-variant hover:text-on-surface'
+                  }`}
+                  title="Google Gemini Flash RAG Pipeline"
+                >
+                  <Sparkles className="w-3 h-3" />
+                  <span>Gemini RAG</span>
+                </button>
               </div>
             </div>
 
@@ -405,10 +429,14 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
             <button
               type="button"
               disabled={isRunningAgent || !prompt.trim()}
-              onClick={() => onRunAgent(prompt, 'rag')}
+              onClick={() => onRunAgent(prompt, execMode)}
               className="w-full py-3 px-4 rounded-xl bg-primary hover:bg-primary-fixed text-on-primary font-semibold text-sm transition-colors cursor-pointer disabled:opacity-50"
             >
-              {isRunningAgent ? 'Checking Valio Aimo Stock & Prices...' : 'Place Order'}
+              {isRunningAgent
+                ? 'Checking Valio Aimo Stock & Prices...'
+                : execMode === 'deterministic'
+                ? 'Place Order (Instant · <25ms)'
+                : 'Place Order (Gemini Flash RAG)'}
             </button>
           </div>
 
