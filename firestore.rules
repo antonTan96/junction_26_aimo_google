@@ -1,0 +1,102 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default-deny global safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+          || request.auth.token.email == 'devstar7631@gcplab.me'
+        );
+    }
+
+    // Client SDK connection health check only (single-doc get, no list)
+    match /test/{docId} {
+      allow get: if isValidId(docId) && docId == 'connection';
+      allow list, create, update, delete: if false;
+    }
+
+    // Admin registry (read-only for authenticated admins; server-managed)
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && isSignedIn() && request.auth.uid == adminId;
+      allow list, create, update, delete: if false;
+    }
+
+    // All AimoGate operational collections are server-authoritative (accessed via firebase-admin
+    // inside the Express/MCP gateway enforcing Zero-Trust RBAC and field projection).
+    // Only verified platform admins may inspect operational documents directly.
+    match /policies/{tenantId} {
+      allow get: if isValidId(tenantId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /products/{sku} {
+      allow get: if isValidId(sku) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /contract_prices/{priceId} {
+      allow get: if isValidId(priceId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /warehouse_stock/{sku} {
+      allow get: if isValidId(sku) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /quote_locks/{quoteId} {
+      allow get: if isValidId(quoteId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /recurrent_grants/{grantId} {
+      allow get: if isValidId(grantId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /scheduled_prompts/{scheduleId} {
+      allow get: if isValidId(scheduleId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+
+    match /system_config/{docId} {
+      allow get: if isValidId(docId) && isAdmin();
+      allow list: if isAdmin();
+      allow write: if false;
+    }
+  }
+}

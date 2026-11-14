@@ -1,0 +1,193 @@
+{
+  "entities": {
+    "TenantPolicy": {
+      "title": "TenantPolicy",
+      "description": "Buyer tenant autonomous procurement limits and category whitelist.",
+      "type": "object",
+      "properties": {
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "tenant_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "max_auto_approve_eur": { "type": "number" },
+        "max_auto_approve_litres": { "type": "number" },
+        "allowed_categories": { "type": "array" },
+        "anomaly_sensitivity_pct": { "type": "number" },
+        "auto_dispute_enabled": { "type": "boolean" }
+      },
+      "required": ["tenant_id", "tenant_name", "max_auto_approve_eur", "max_auto_approve_litres", "allowed_categories"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Valio Aimo catalog SKU including confidential wholesale cost, margin, and roadmap visibility.",
+      "type": "object",
+      "properties": {
+        "sku": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "dietary_tags": { "type": "array" },
+        "pack_format": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "pack_volume_litres": { "type": "number" },
+        "min_lead_time_hours": { "type": "number" },
+        "is_active": { "type": "boolean" },
+        "internal_cost_eur": { "type": "number" },
+        "internal_margin_pct": { "type": "number" },
+        "roadmap_status": { "type": "string", "enum": ["LIVE", "UNRELEASED"] }
+      },
+      "required": ["sku", "name", "category", "pack_format", "pack_volume_litres", "is_active", "roadmap_status"]
+    },
+    "ContractPrice": {
+      "title": "ContractPrice",
+      "description": "Tenant-specific negotiated wholesale pack price.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "sku": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "contract_pack_price_eur": { "type": "number" }
+      },
+      "required": ["id", "tenant_id", "sku", "contract_pack_price_eur"]
+    },
+    "WarehouseStock": {
+      "title": "WarehouseStock",
+      "description": "Real-time available and reserved pack inventory for a SKU.",
+      "type": "object",
+      "properties": {
+        "sku": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "available_packs": { "type": "number" },
+        "reserved_packs": { "type": "number" }
+      },
+      "required": ["sku", "available_packs", "reserved_packs"]
+    },
+    "QuoteLock": {
+      "title": "QuoteLock",
+      "description": "Two-phase 15-minute stock and fixed-price reservation.",
+      "type": "object",
+      "properties": {
+        "quote_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "sku": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "pack_quantity": { "type": "number" },
+        "total_litres": { "type": "number" },
+        "locked_total_eur": { "type": "number" },
+        "deliver_by": { "type": "string" },
+        "status": { "type": "string", "enum": ["LOCKED", "CONSUMED", "RELEASED", "EXPIRED"] },
+        "expires_at": { "type": "string" },
+        "created_at": { "type": "string" }
+      },
+      "required": ["quote_id", "tenant_id", "sku", "pack_quantity", "locked_total_eur", "status"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Autonomous or human-approved wholesale purchase order.",
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "quote_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "po_reference": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "status": { "type": "string", "enum": ["CONFIRMED", "PENDING_APPROVAL", "REJECTED"] },
+        "total_eur": { "type": "number" },
+        "approval_type": { "type": "string", "enum": ["AUTO", "ONE_TIME", "RECURRENT_WINDOW", "PENDING"] },
+        "created_at": { "type": "string" }
+      },
+      "required": ["order_id", "quote_id", "tenant_id", "po_reference", "status", "total_eur", "approval_type"]
+    },
+    "RecurrentGrant": {
+      "title": "RecurrentGrant",
+      "description": "Time-windowed standing approval pool for recurring autonomous replenishments.",
+      "type": "object",
+      "properties": {
+        "grant_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "frequency": { "type": "string", "enum": ["DAILY", "WEEKLY", "MONTHLY"] },
+        "window_days": { "type": "number" },
+        "max_budget_per_period_eur": { "type": "number" },
+        "current_period_spent_eur": { "type": "number" },
+        "status": { "type": "string", "enum": ["ACTIVE", "EXPIRED", "REVOKED"] }
+      },
+      "required": ["grant_id", "tenant_id", "category", "status", "max_budget_per_period_eur"]
+    },
+    "ScheduledPrompt": {
+      "title": "ScheduledPrompt",
+      "description": "Recurring or threshold-triggered procurement prompt configuration.",
+      "type": "object",
+      "properties": {
+        "schedule_id": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "prompt": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "strategy": { "type": "string", "enum": ["cron", "threshold", "one-time"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "NEEDS_SIGNOFF", "PAUSED"] }
+      },
+      "required": ["schedule_id", "tenant_id", "name", "prompt", "strategy", "status"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable cryptographically hashed governance audit trail entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "number" },
+        "timestamp": { "type": "string" },
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "actor_type": { "type": "string" },
+        "actor_id": { "type": "string" },
+        "action": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "tenant_id", "actor_type", "actor_id", "action"]
+    },
+    "GatewayConfig": {
+      "title": "GatewayConfig",
+      "description": "Singleton gateway state including global killswitch and sequence counters.",
+      "type": "object",
+      "properties": {
+        "initialized": { "type": "boolean" },
+        "killswitch_halted": { "type": "boolean" },
+        "audit_seq": { "type": "number" },
+        "id_counter": { "type": "number" }
+      },
+      "required": ["initialized", "killswitch_halted", "audit_seq", "id_counter"]
+    }
+  },
+  "firestore": {
+    "/policies/{tenantId}": {
+      "schema": { "$ref": "#/entities/TenantPolicy" },
+      "description": "Per-tenant autonomous procurement policy limits and category whitelists."
+    },
+    "/products/{sku}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Valio Aimo SKU catalog (server-managed; confidential columns isolated from external clients)."
+    },
+    "/contract_prices/{priceId}": {
+      "schema": { "$ref": "#/entities/ContractPrice" },
+      "description": "Tenant-specific contract pricing records keyed by tenant_id__sku."
+    },
+    "/warehouse_stock/{sku}": {
+      "schema": { "$ref": "#/entities/WarehouseStock" },
+      "description": "Available and reserved pack quantities per SKU."
+    },
+    "/quote_locks/{quoteId}": {
+      "schema": { "$ref": "#/entities/QuoteLock" },
+      "description": "Two-phase quote reservations with 15-minute expiration."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Submitted, held, approved, and rejected B2B purchase orders."
+    },
+    "/recurrent_grants/{grantId}": {
+      "schema": { "$ref": "#/entities/RecurrentGrant" },
+      "description": "Standing recurrent approval window budgets per tenant."
+    },
+    "/scheduled_prompts/{scheduleId}": {
+      "schema": { "$ref": "#/entities/ScheduledPrompt" },
+      "description": "Configured autonomous procurement directives."
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable append-only audit trail entries."
+    },
+    "/system_config/{docId}": {
+      "schema": { "$ref": "#/entities/GatewayConfig" },
+      "description": "Gateway configuration and killswitch state."
+    }
+  }
+}

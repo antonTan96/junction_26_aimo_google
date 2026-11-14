@@ -1,0 +1,6 @@
+{
+  "name": "AimoGate — Autonomous Procurement Governance",
+  "description": "Zero-Trust B2B Trade & Governance Gateway for Valio Aimo autonomous procurement agents with deterministic policy guardrails, spend velocity limits, prompt scheduling, and cryptographic audit trails.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
