@@ -23,6 +23,8 @@ import type {
   ZeroTrustInspectResponse,
 } from '../types/aimogate.ts';
 import { ValioAimoCatalogService } from './valioAimoCatalog.ts';
+import { preprocessBuyerPromptSync } from './promptPreprocessor.ts';
+import type { OrderItemDTO } from '../types/aimogate.ts';
 
 export const SYSTEM_CATEGORIES = [
   'dairy',
@@ -1231,6 +1233,8 @@ export class AimoGateStore {
       po_reference: string;
       traces?: AgentStepTrace[];
       offer_comparisons?: PublicOfferDTO[];
+      items?: OrderItemDTO[];
+      recipe_name?: string | null;
     },
     now: Date = new Date()
   ): OrderDTO {
@@ -1335,6 +1339,8 @@ export class AimoGateStore {
       verification_hash: computeShortHash(`${orderId}|${quote.quote_id}|${quote.locked_total_eur}|${req.po_reference}`),
       traces: req.traces,
       offer_comparisons: req.offer_comparisons,
+      items: req.items,
+      recipe_name: req.recipe_name ?? null,
     };
 
     this.orders.set(orderId, order);
@@ -1775,6 +1781,162 @@ export class AimoGateStore {
     };
 
     const traces: AgentStepTrace[] = [];
+    const preprocessed = preprocessBuyerPromptSync(req.prompt);
+
+    // Multi-item or Recipe Procurement Flow
+    if (preprocessed.request_type === 'recipe' || (preprocessed.request_type === 'multi_item' && preprocessed.items.length > 1)) {
+      const isRecipe = preprocessed.request_type === 'recipe';
+      const recipeTitle = preprocessed.recipe ? preprocessed.recipe.name : 'Multi-Item Order';
+
+      traces.push({
+        step_number: 1,
+        title: isRecipe
+          ? `Autonomous Goal Analysis & Recipe Deduction (${recipeTitle})`
+          : 'Autonomous Goal Analysis & Multi-Item Decomposition',
+        description: isRecipe
+          ? `Identified recipe '${recipeTitle}' (Target yield: ${preprocessed.recipe?.servings_or_yield} ${preprocessed.recipe?.yield_unit || 'servings'}). Deduced ${preprocessed.items.length} raw ingredients: ${preprocessed.items.map((i) => `${i.ingredient_name} (${i.quantity} ${i.unit})`).join(', ')}.`
+          : `Identified multi-item procurement intent. Decomposed into ${preprocessed.items.length} line items: ${preprocessed.items.map((i) => `${i.ingredient_name} (${i.quantity} ${i.unit})`).join(', ')}.`,
+        action_type: 'reasoning',
+        latency_ms: 10,
+        tool_input: { prompt: req.prompt, preprocessed },
+        tool_output: preprocessed.items,
+      });
+
+      const orderItems: OrderItemDTO[] = [];
+      const lockedQuotes: QuoteLock[] = [];
+      let totalOrderCost = 0;
+      let totalOrderLitres = 0;
+
+      for (const item of preprocessed.items) {
+        let offers = this.searchOffers(principal, {
+          query: item.search_query,
+          attributes: item.dietary_tags,
+          required_volume_litres: item.quantity,
+          deliver_by: preprocessed.deliver_by,
+        });
+
+        if (offers.length === 0) {
+          offers = this.searchOffers(principal, {
+            query: item.ingredient_name.split(' ')[0],
+            required_volume_litres: item.quantity,
+            deliver_by: preprocessed.deliver_by,
+          });
+        }
+
+        if (offers.length === 0) {
+          offers = this.searchOffers(principal, {
+            query: item.category_hint,
+            required_volume_litres: item.quantity,
+            deliver_by: preprocessed.deliver_by,
+          });
+        }
+
+        const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);
+        const bestOffer = inStockOffers[0] || offers[0];
+
+        if (bestOffer) {
+          const packVol = bestOffer.pack_volume_litres > 0 ? bestOffer.pack_volume_litres : 1.0;
+          const packsToLock = Math.max(1, Math.min(Math.ceil(item.quantity / packVol), Math.max(1, bestOffer.available_packs)));
+
+          const quote = this.lockQuote(principal, {
+            sku: bestOffer.sku,
+            pack_quantity: packsToLock,
+            deliver_by: preprocessed.deliver_by,
+          });
+
+          lockedQuotes.push(quote);
+          const lineCost = quote.locked_total_eur;
+          const deliveredVol = packsToLock * packVol;
+          totalOrderCost += lineCost;
+          totalOrderLitres += deliveredVol;
+
+          orderItems.push({
+            sku: bestOffer.sku,
+            product_name: bestOffer.name,
+            category: bestOffer.category,
+            dietary_tags: bestOffer.dietary_tags,
+            pack_format: bestOffer.pack_format,
+            pack_quantity: packsToLock,
+            delivered_volume: deliveredVol,
+            unit_price_eur: Number((lineCost / packsToLock).toFixed(2)),
+            total_price_eur: lineCost,
+            deduced_from_ingredient: `${item.ingredient_name} (${item.quantity} ${item.unit})`,
+          });
+        }
+      }
+
+      totalOrderCost = Number(totalOrderCost.toFixed(2));
+      const primaryQuote = lockedQuotes[0] || this.quoteLocks.values().next().value;
+
+      traces.push({
+        step_number: 2,
+        title: 'Tool Call: search_offers & lock_quotes (Composite BOM)',
+        description: `Reserved stock across ${orderItems.length} line items with Valio Aimo. Total composite cost: €${totalOrderCost.toFixed(2)}.`,
+        action_type: 'tool_call',
+        tool_name: 'lock_quote_batch',
+        latency_ms: 18,
+        tool_output: orderItems,
+      });
+
+      const poRef = req.po_reference || this.nextHex('PO');
+      const order = this.commitOrder(principal, {
+        quote_id: primaryQuote.quote_id,
+        po_reference: poRef,
+        items: orderItems,
+        recipe_name: isRecipe ? recipeTitle : null,
+      });
+
+      // Update composite total cost and litres
+      order.total_eur = totalOrderCost;
+      order.total_litres = totalOrderLitres;
+      order.items = orderItems;
+      order.recipe_name = isRecipe ? recipeTitle : null;
+
+      // Evaluate composite policy
+      const policy = this.policies.get(tenantId)!;
+      if (totalOrderCost > policy.max_auto_approve_eur && order.status === 'CONFIRMED') {
+        order.status = 'PENDING_APPROVAL';
+        order.approval_type = 'PENDING';
+        order.approved_by = null;
+        order.violation_reasons = [
+          `Composite order total €${totalOrderCost.toFixed(2)} exceeds auto-approval threshold of €${policy.max_auto_approve_eur.toFixed(2)}`,
+        ];
+      }
+
+      const passes = order.status === 'CONFIRMED';
+      const summary = passes
+        ? `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) AUTO-APPROVED by AimoGate.`
+        : `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) HELD by Policy Firewall: ${(order.violation_reasons || []).join('; ')}.`;
+
+      traces.push({
+        step_number: 3,
+        title: 'Final Governance Decision',
+        description: summary,
+        action_type: 'policy_decision',
+        latency_ms: 8,
+        tool_output: {
+          order_id: order.order_id,
+          status: order.status,
+          total_eur: totalOrderCost,
+          violations: order.violation_reasons,
+        },
+      });
+
+      order.traces = [...traces];
+
+      return {
+        success: true,
+        mode_used: mode,
+        execution_time_ms: Math.max(28, Date.now() - t0 + 30),
+        traces,
+        final_status: order.status,
+        order,
+        summary_message: summary,
+        preprocessed_prompt: preprocessed,
+      };
+    }
+
+    // Single item flow
     const parsed = parseBuyerPrompt(req.prompt);
 
     traces.push({
@@ -1812,6 +1974,7 @@ export class AimoGateStore {
         traces,
         final_status: 'NO_OFFERS',
         summary_message: 'No matching products found matching criteria.',
+        preprocessed_prompt: preprocessed,
       };
     }
 
@@ -1857,10 +2020,24 @@ export class AimoGateStore {
     });
 
     const poRef = req.po_reference || this.nextHex('PO');
+    const singleItem: OrderItemDTO = {
+      sku: bestOffer.sku,
+      product_name: bestOffer.name,
+      category: bestOffer.category,
+      dietary_tags: bestOffer.dietary_tags,
+      pack_format: bestOffer.pack_format,
+      pack_quantity: packsToLock,
+      delivered_volume: packsToLock * (bestOffer.pack_volume_litres || 1.0),
+      unit_price_eur: Number((quote.locked_total_eur / packsToLock).toFixed(2)),
+      total_price_eur: quote.locked_total_eur,
+      deduced_from_ingredient: preprocessed.items[0]?.ingredient_name || bestOffer.name,
+    };
+
     const order = this.commitOrder(principal, {
       quote_id: quote.quote_id,
       po_reference: poRef,
       offer_comparisons: offers,
+      items: [singleItem],
     });
 
     const { traces: _ignoredTraces, ...orderSnapshot } = order;
@@ -1913,6 +2090,7 @@ export class AimoGateStore {
       final_status: finalStatus,
       order,
       summary_message: summary,
+      preprocessed_prompt: preprocessed,
     };
   }
 

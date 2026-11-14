@@ -583,7 +583,13 @@ export class ValioAimoCatalogService {
       text.includes('pulla') ||
       text.includes('piirakka') ||
       text.includes('bakery') ||
-      text.includes('pastry');
+      text.includes('pastry') ||
+      text.includes('jauho') ||
+      text.includes('flour') ||
+      text.includes('hiiva') ||
+      text.includes('yeast') ||
+      text.includes('leivinjauhe') ||
+      text.includes('baking powder');
 
     // Cookies and baked goods should be categorized as bakery, even if they contain butter/milk
     if (!isIceCream && isCookieOrBakery) {

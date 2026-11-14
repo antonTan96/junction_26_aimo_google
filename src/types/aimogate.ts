@@ -90,6 +90,53 @@ export interface OrderDTO {
   verification_hash?: string;
   traces?: AgentStepTrace[];
   offer_comparisons?: PublicOfferDTO[];
+  items?: OrderItemDTO[];
+  recipe_name?: string | null;
+}
+
+export type ProcurementRequestType = 'single_item' | 'multi_item' | 'recipe';
+
+export interface DecomposedIngredient {
+  ingredient_name: string;
+  search_query: string;
+  quantity: number;
+  unit: string;
+  category_hint: string;
+  dietary_tags: string[];
+  importance: 'essential' | 'optional' | 'substitute';
+  culinary_role?: string;
+}
+
+export interface RecipeMetadata {
+  name: string;
+  servings_or_yield?: number;
+  yield_unit?: string;
+  cuisine?: string;
+  description?: string;
+}
+
+export interface PreprocessedPromptResult {
+  raw_prompt: string;
+  request_type: ProcurementRequestType;
+  recipe?: RecipeMetadata;
+  dietary_tags: string[];
+  urgency?: 'normal' | 'urgent' | 'asap';
+  deliver_by: string;
+  notes?: string;
+  items: DecomposedIngredient[];
+}
+
+export interface OrderItemDTO {
+  sku: string;
+  product_name: string;
+  category: string;
+  dietary_tags?: string[];
+  pack_format: string;
+  pack_quantity: number;
+  delivered_volume: number;
+  unit_price_eur: number;
+  total_price_eur: number;
+  deduced_from_ingredient?: string;
 }
 
 export interface RecurrentApprovalGrant {
@@ -176,6 +223,7 @@ export interface AgentRunResponse {
   final_status: string;
   order?: OrderDTO | null;
   summary_message: string;
+  preprocessed_prompt?: PreprocessedPromptResult;
 }
 
 export interface CustomerRosterItem {

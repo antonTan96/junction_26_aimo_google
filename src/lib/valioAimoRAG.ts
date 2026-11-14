@@ -5,10 +5,12 @@ import {
   evaluateOrderPolicy,
   DEFAULT_TENANT_ID,
 } from './aimogate.ts';
+import { preprocessBuyerPrompt } from './promptPreprocessor.ts';
 import type {
   AgentRunResponse,
   AgentStepTrace,
   OrderDTO,
+  OrderItemDTO,
   Principal,
   QuoteLock,
   TenantPolicy,
@@ -55,10 +57,12 @@ export class ValioAimoRAGService {
 
   /**
    * Execute Retrieval-Augmented Generation for kitchen procurement:
-   * 1. Retrieve candidates from Catalog/MariaDB matching semantic terms.
-   * 2. Augment candidates with live Valio Aimo prices and warehouse inventory.
-   * 3. Evaluate tenant policy constraints & volume quotas.
-   * 4. Synthesize optimal purchase recommendation with audit trace.
+   * 1. Preprocess prompt: classify into single_item, multi_item, or recipe,
+   *    deducing raw materials, yield, and dietary substitutions.
+   * 2. Retrieve candidates from Catalog/MariaDB matching semantic terms.
+   * 3. Augment candidates with live Valio Aimo prices and warehouse inventory.
+   * 4. Evaluate tenant policy constraints & volume quotas.
+   * 5. Synthesize optimal purchase recommendation with audit trace.
    */
   public async executeRAGPipeline(params: {
     prompt: string;
@@ -68,8 +72,239 @@ export class ValioAimoRAGService {
   }): Promise<RAGExecutionResult> {
     const t0 = Date.now();
     const { prompt, policy, existingOrders = [], customer = '123' } = params;
-    const parsed = parseBuyerPrompt(prompt);
+    const preprocessed = await preprocessBuyerPrompt(prompt);
     const traces: AgentStepTrace[] = [];
+
+    // Branch A: Multi-item or Recipe Procurement Flow
+    if (preprocessed.request_type === 'recipe' || (preprocessed.request_type === 'multi_item' && preprocessed.items.length > 1)) {
+      const isRecipe = preprocessed.request_type === 'recipe';
+      const recipeTitle = preprocessed.recipe ? preprocessed.recipe.name : 'Multi-Item Order';
+
+      traces.push({
+        step_number: 1,
+        title: isRecipe
+          ? `RAG Step 1: Culinary Recipe Deduction (${recipeTitle})`
+          : 'RAG Step 1: Multi-Item Procurement Decomposition',
+        description: isRecipe
+          ? `Deduced ${preprocessed.items.length} required raw materials for ${recipeTitle} (Yield: ${preprocessed.recipe?.servings_or_yield} ${preprocessed.recipe?.yield_unit || 'servings'}). Dietary constraints: [${preprocessed.dietary_tags.join(', ') || 'none'}].`
+          : `Decomposed multi-item procurement request into ${preprocessed.items.length} distinct item requirements.`,
+        action_type: 'reasoning',
+        latency_ms: Math.max(8, Date.now() - t0),
+        tool_input: { prompt, preprocessed },
+        tool_output: preprocessed.items,
+      });
+
+      // Retrieve catalog matches and live price/availability for each ingredient
+      const orderItems: OrderItemDTO[] = [];
+      const primaryCandidatesContexts: RAGProductContext[] = [];
+      let totalCostEur = 0;
+      let totalLitres = 0;
+      const policyViolations: string[] = [];
+      const dateStr = preprocessed.deliver_by.slice(0, 10);
+
+      // Search catalog for all ingredients
+      const allProductIds: string[] = [];
+      const matchedPerItem: { item: typeof preprocessed.items[0]; product: CatalogProduct }[] = [];
+
+      for (const item of preprocessed.items) {
+        let matches = this.catalog.search(item.search_query, {
+          limit: 4,
+          tags: item.dietary_tags.length > 0 ? item.dietary_tags : undefined,
+        });
+        if (matches.length === 0) {
+          matches = this.catalog.search(item.search_query, { limit: 4 });
+        }
+        if (matches.length === 0) {
+          matches = this.catalog.search(item.category_hint, { limit: 4 });
+        }
+
+        const chosen = matches[0] || this.catalog.getBuiltinStaples()[0];
+        if (chosen) {
+          matchedPerItem.push({ item, product: chosen });
+          allProductIds.push(chosen.id);
+        }
+      }
+
+      // Live price and availability batch lookup
+      const [prices, availability] = await Promise.all([
+        this.catalog.fetchLivePrices(allProductIds, dateStr, customer),
+        this.catalog.fetchLiveAvailability(allProductIds, dateStr, customer),
+      ]);
+
+      const allowedCats = (policy.allowed_categories || []).map((c) => c.toLowerCase());
+
+      for (let i = 0; i < matchedPerItem.length; i++) {
+        const { item, product: prod } = matchedPerItem[i];
+        const priceInfo = prices.get(prod.id);
+        const stockInfo = availability.get(prod.id);
+
+        const packVol = prod.pack_volume_litres && prod.pack_volume_litres > 0 ? prod.pack_volume_litres : 1.0;
+        const catalogPrice = priceInfo?.catalogPrice ?? prod.base_price_eur ?? 12.5;
+        const compPrice = priceInfo?.compPrice ?? Number((catalogPrice / packVol).toFixed(2));
+        const compUnit = priceInfo?.compUnit || 'L';
+        const isAvailable = stockInfo?.isAvailable ?? true;
+        const availablePacks = stockInfo?.availablePacks ?? 500;
+
+        const packsNeeded = Math.max(1, Math.ceil(item.quantity / packVol));
+        const lineCost = Number((packsNeeded * catalogPrice).toFixed(2));
+        const deliveredVol = Number((packsNeeded * packVol).toFixed(2));
+
+        totalCostEur += lineCost;
+        totalLitres += deliveredVol;
+
+        // Category whitelist validation per item
+        if (!allowedCats.includes(prod.category.toLowerCase())) {
+          policyViolations.push(
+            `GUARDRAIL BLOCKED: Item '${prod.display_name}' category '${prod.category}' is not whitelisted for client '${policy.tenant_name}'`
+          );
+        }
+
+        if (!isAvailable || availablePacks < packsNeeded) {
+          policyViolations.push(`Insufficient stock for '${prod.display_name}': need ${packsNeeded} packs, available: ${availablePacks}`);
+        }
+
+        const ctx: RAGProductContext = {
+          product: prod,
+          catalogPriceEur: catalogPrice,
+          comparisonPriceEur: compPrice,
+          comparisonUnit: compUnit,
+          isAvailable,
+          availablePacks,
+          packsRequired: packsNeeded,
+          totalCostEur: lineCost,
+          compliancePass: isAvailable && availablePacks >= packsNeeded,
+          complianceNotes: [],
+        };
+
+        primaryCandidatesContexts.push(ctx);
+
+        orderItems.push({
+          sku: prod.id,
+          product_name: prod.display_name,
+          category: prod.category,
+          dietary_tags: prod.dietary_tags,
+          pack_format: prod.pack_format,
+          pack_quantity: packsNeeded,
+          delivered_volume: deliveredVol,
+          unit_price_eur: catalogPrice,
+          total_price_eur: lineCost,
+          deduced_from_ingredient: `${item.ingredient_name} (${item.quantity} ${item.unit})`,
+        });
+      }
+
+      totalCostEur = Number(totalCostEur.toFixed(2));
+
+      if (totalCostEur > policy.max_auto_approve_eur) {
+        policyViolations.push(
+          `Total composite order cost €${totalCostEur.toFixed(2)} exceeds tenant auto-approval limit of €${policy.max_auto_approve_eur.toFixed(2)}`
+        );
+      }
+
+      traces.push({
+        step_number: 2,
+        title: 'RAG Step 2: Semantic Catalog Retrieval & BOM Formulation',
+        description: `Matched ${orderItems.length} catalog products to the recipe requirements. Live prices and warehouse inventory augmented via Valio Aimo API.`,
+        action_type: 'tool_call',
+        tool_name: 'valio_aimo_live_enrich',
+        latency_ms: 24,
+        tool_output: orderItems.map((o) => ({
+          deduced_from: o.deduced_from_ingredient,
+          sku: o.sku,
+          product: o.product_name,
+          packs: o.pack_quantity,
+          unit_price: `€${o.unit_price_eur}`,
+          total: `€${o.total_price_eur}`,
+        })),
+      });
+
+      const passes = policyViolations.length === 0;
+      const finalStatus = passes ? 'CONFIRMED' : 'PENDING_APPROVAL';
+
+      const summary = passes
+        ? `Order for ${recipeTitle} (${orderItems.length} items, total €${totalCostEur.toFixed(2)}) AUTO-APPROVED within policy cap of €${policy.max_auto_approve_eur.toFixed(2)}.`
+        : `Order for ${recipeTitle} (${orderItems.length} items, total €${totalCostEur.toFixed(2)}) flagged for manager approval: ${policyViolations.join('; ')}.`;
+
+      traces.push({
+        step_number: 3,
+        title: 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
+        description: summary,
+        action_type: 'reasoning',
+        latency_ms: 12,
+        tool_output: {
+          recipe: recipeTitle,
+          total_eur: totalCostEur,
+          items_count: orderItems.length,
+          policy_passes: passes,
+          violations: policyViolations,
+        },
+      });
+
+      const primaryCandidate = primaryCandidatesContexts[0] || null;
+
+      const mockQuote: QuoteLock = {
+        quote_id: `quote_rag_${Date.now()}`,
+        tenant_id: policy.tenant_id,
+        sku: primaryCandidate?.product.id || 'COMPOSITE',
+        pack_quantity: orderItems.reduce((acc, it) => acc + it.pack_quantity, 0),
+        locked_total_eur: totalCostEur,
+        total_litres: totalLitres,
+        deliver_by: preprocessed.deliver_by,
+        status: 'LOCKED',
+        expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+        created_at: new Date().toISOString(),
+      };
+
+      const agentResponse: AgentRunResponse = {
+        success: true,
+        mode_used: 'rag-recipe-decomposed',
+        execution_time_ms: Date.now() - t0,
+        traces,
+        final_status: finalStatus,
+        summary_message: summary,
+        preprocessed_prompt: preprocessed,
+        order: {
+          order_id: `ord_${Date.now()}`,
+          quote_id: mockQuote.quote_id,
+          tenant_id: policy.tenant_id,
+          po_reference: `PO-RECIPE-${Date.now().toString().slice(-6)}`,
+          sku: primaryCandidate?.product.id || 'COMPOSITE',
+          product_name: isRecipe
+            ? `${recipeTitle} (${preprocessed.recipe?.servings_or_yield} ${preprocessed.recipe?.yield_unit})`
+            : `${recipeTitle} (${orderItems.length} items)`,
+          recipe_name: isRecipe ? recipeTitle : null,
+          category: primaryCandidate?.product.category || 'bakery',
+          pack_quantity: mockQuote.pack_quantity,
+          total_litres: totalLitres,
+          total_eur: totalCostEur,
+          status: passes ? 'CONFIRMED' : 'PENDING_APPROVAL',
+          approval_type: passes ? 'AUTO' : 'PENDING',
+          approved_by: passes ? 'AimoGate Policy Engine (Auto)' : null,
+          recurrent_grant_id: null,
+          violation_reasons: passes ? null : policyViolations,
+          created_at: new Date().toISOString(),
+          items: orderItems,
+          traces,
+        },
+      };
+
+      return {
+        query: recipeTitle,
+        retrievedCount: primaryCandidatesContexts.length,
+        candidates: primaryCandidatesContexts,
+        selectedProduct: primaryCandidate,
+        quoteLocked: mockQuote,
+        policyResult: {
+          passes,
+          violations: policyViolations,
+          requiresHumanSignoff: !passes,
+        },
+        explanation: summary,
+        agentResponse,
+      };
+    }
+
+    // Branch B: Single Item Procurement Flow (Backward-Compatible Standard RAG)
+    const parsed = parseBuyerPrompt(prompt);
 
     // Step 1: Retrieval from Catalog (MariaDB / In-Memory Index)
     const rawCandidates = this.catalog.search(parsed.query, {
@@ -101,6 +336,7 @@ export class ValioAimoRAGService {
         traces,
         final_status: 'NO_OFFERS',
         summary_message: `RAG retrieval found 0 matching items in the catalog for '${parsed.query}'.`,
+        preprocessed_prompt: preprocessed,
       };
       return {
         query: parsed.query,
@@ -276,6 +512,19 @@ export class ValioAimoRAGService {
         ? `Order (€${selectedCost.toFixed(2)}) is within the €${policy.max_auto_approve_eur} threshold and satisfies category rules. Order AUTO-APPROVED.`
         : `Order (€${selectedCost.toFixed(2)}) flagged for manager approval: ${policyEval.violations.join('. ')}.`);
 
+    const singleOrderItem: OrderItemDTO = {
+      sku: selected.product.id,
+      product_name: selected.product.display_name,
+      category: selected.product.category,
+      dietary_tags: selected.product.dietary_tags,
+      pack_format: selected.product.pack_format,
+      pack_quantity: selectedPacks,
+      delivered_volume: selectedPacks * selected.product.pack_volume_litres,
+      unit_price_eur: selected.catalogPriceEur,
+      total_price_eur: selectedCost,
+      deduced_from_ingredient: preprocessed.items[0]?.ingredient_name || selected.product.display_name,
+    };
+
     const agentResponse: AgentRunResponse = {
       success: true,
       mode_used: nemotronDecision ? 'nemotron-3.5-super-vl' : 'rag-augmented',
@@ -283,6 +532,7 @@ export class ValioAimoRAGService {
       traces,
       final_status: finalStatus,
       summary_message: explanation,
+      preprocessed_prompt: preprocessed,
       order: {
         order_id: `ord_${Date.now()}`,
         quote_id: mockQuote.quote_id,
@@ -300,6 +550,7 @@ export class ValioAimoRAGService {
         recurrent_grant_id: null,
         violation_reasons: isAutoApproved ? null : policyEval.violations,
         created_at: new Date().toISOString(),
+        items: [singleOrderItem],
         traces,
       },
     };

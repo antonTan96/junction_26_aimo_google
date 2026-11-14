@@ -17,6 +17,9 @@ import {
   Tag,
   Plus,
   Loader2,
+  Utensils,
+  ChefHat,
+  Layers,
 } from 'lucide-react';
 import type {
   AgentRunResponse,
@@ -60,6 +63,24 @@ interface PromptSchedulerViewProps {
 }
 
 const SCENARIO_PRESETS = [
+  {
+    label: '1,000 GF Licorice Cookies',
+    note: 'Culinary Recipe & Scaling',
+    prompt:
+      'I need ingredients for 1,000 gluten-free licorice cookies for a wedding event next Thursday.',
+  },
+  {
+    label: 'Salmon Soup for 50',
+    note: 'Nordic Lohikeitto Recipe',
+    prompt:
+      'Salmon soup for 50 people by Friday morning. Find an option based on price and availability.',
+  },
+  {
+    label: '50L Milk & 10kg Butter',
+    note: 'Multi-Item Order',
+    prompt:
+      'We need 50 liters of organic whole milk and 10kg butter for the bakery.',
+  },
   {
     label: '1,000L Milk (€1,180)',
     note: 'Over limit — needs sign-off',
@@ -413,7 +434,78 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                   .replace(/autonomous limit/gi, 'automatic limit')}
               </p>
 
-              {agentResponse.order && (
+              {/* Recipe & Preprocessed Prompt Metadata Badge */}
+              {agentResponse.preprocessed_prompt && agentResponse.preprocessed_prompt.request_type === 'recipe' && (
+                <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-xl bg-surface-container-high/60 border border-outline-variant/40 text-xs">
+                  <ChefHat className="w-4 h-4 text-primary shrink-0" />
+                  <span className="font-semibold text-on-surface font-headline">
+                    {agentResponse.preprocessed_prompt.recipe?.name || agentResponse.order?.recipe_name || 'Recipe'}
+                  </span>
+                  {agentResponse.preprocessed_prompt.recipe?.servings_or_yield && (
+                    <span className="px-2 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
+                      Yield: {agentResponse.preprocessed_prompt.recipe.servings_or_yield} {agentResponse.preprocessed_prompt.recipe.yield_unit || 'servings'}
+                    </span>
+                  )}
+                  {agentResponse.preprocessed_prompt.recipe?.cuisine && (
+                    <span className="text-on-surface-variant text-[11px]">
+                      &bull; {agentResponse.preprocessed_prompt.recipe.cuisine}
+                    </span>
+                  )}
+                  {agentResponse.preprocessed_prompt.dietary_tags?.map((t) => (
+                    <span
+                      key={t}
+                      className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container uppercase text-[10px] tracking-wide font-medium"
+                    >
+                      {t}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Multi-Item / Recipe Line Items Breakdown */}
+              {agentResponse.order?.items && agentResponse.order.items.length > 0 ? (
+                <div className="pt-2 border-t border-outline-variant/40 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-on-surface">
+                    <span className="flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-primary" />
+                      {agentResponse.order.items.length > 1
+                        ? `Procurement Breakdown (${agentResponse.order.items.length} Line Items)`
+                        : 'Procured Catalog Item'}
+                    </span>
+                    <span className="text-[11px] text-on-surface-variant font-normal">
+                      Valio Aimo Contract Sourcing
+                    </span>
+                  </div>
+                  <div className="divide-y divide-outline-variant/20 rounded-xl bg-surface-container-low/70 border border-outline-variant/30 overflow-hidden text-xs">
+                    {agentResponse.order.items.map((item, idx) => (
+                      <div key={`${item.sku}-${idx}`} className="p-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-on-surface truncate">{item.product_name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-container-highest text-on-surface-variant uppercase font-mono">
+                              {item.category}
+                            </span>
+                          </div>
+                          {item.deduced_from_ingredient && (
+                            <div className="text-[11px] text-on-surface-variant flex items-center gap-1 mt-0.5">
+                              <span className="text-primary font-medium">Deduced:</span>
+                              <span>{item.deduced_from_ingredient}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="font-semibold text-on-surface tabular-nums">
+                            €{item.total_price_eur.toFixed(2)}
+                          </div>
+                          <div className="text-[10px] text-on-surface-variant tabular-nums">
+                            {item.pack_quantity} packs &middot; €{item.unit_price_eur.toFixed(2)}/pack
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : agentResponse.order ? (
                 <div className="grid grid-cols-3 gap-3 pt-2 border-t border-outline-variant/40 text-xs tabular-nums">
                   <div>
                     <div className="text-on-surface-variant">Item</div>
@@ -440,7 +532,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                     </div>
                   </div>
                 </div>
-              )}
+              ) : null}
 
               <div className="pt-1">
                 <button

@@ -13,6 +13,11 @@ import { ValioAimoRAGService } from './src/lib/valioAimoRAG.ts';
 import { MariaDBCatalogClient } from './src/lib/mariadbCatalog.ts';
 import { PersistentAimoGateStore } from './src/lib/firestoreStore.ts';
 import { createAimoGateMcpServer } from './src/lib/mcpServer.ts';
+import {
+  preprocessBuyerPrompt,
+  deduceRecipeFromOntology,
+  CULINARY_RECIPE_DATABASE,
+} from './src/lib/promptPreprocessor.ts';
 import type { Principal, PrincipalType } from './src/types/aimogate.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -329,6 +334,66 @@ export async function createApp() {
       }
 
       res.json(result);
+    })
+  );
+
+  // --- Culinary Recipes & Prompt Preprocessing Engine ---
+  api.post(
+    '/prompt/preprocess',
+    asyncHandler(async (req, res) => {
+      const prompt = typeof req.body?.prompt === 'string' ? req.body.prompt : '';
+      if (!prompt.trim()) {
+        throw new GatewayError(400, 'Field "prompt" is required.');
+      }
+      const result = await preprocessBuyerPrompt(prompt);
+      res.json(result);
+    })
+  );
+
+  api.get('/recipes', (_req, res) => {
+    res.json({
+      count: Object.keys(CULINARY_RECIPE_DATABASE).length,
+      recipes: Object.entries(CULINARY_RECIPE_DATABASE).map(([key, r]) => ({
+        key,
+        name: r.name,
+        aliases: r.aliases,
+        default_yield: r.defaultYield,
+        yield_unit: r.yieldUnit,
+        cuisine: r.cuisine,
+        description: r.description,
+        ingredient_count: r.baseIngredients.length,
+        base_ingredients: r.baseIngredients.map((ing) => ({
+          name: ing.name,
+          search_query: ing.searchQuery,
+          base_qty_per_10: ing.baseQtyPer10Servings,
+          unit: ing.unit,
+          category: ing.categoryHint,
+          role: ing.role,
+        })),
+      })),
+    });
+  });
+
+  api.post(
+    '/recipes/deduce',
+    asyncHandler(async (req, res) => {
+      const recipeKey = req.body?.recipe || req.body?.recipe_key || '';
+      const targetYield = typeof req.body?.yield === 'number' ? req.body.yield : 10;
+      const dietaryTags = Array.isArray(req.body?.dietary_tags) ? req.body.dietary_tags : [];
+      const specialty = typeof req.body?.specialty === 'string' ? req.body.specialty : undefined;
+
+      const ingredients = deduceRecipeFromOntology(recipeKey, targetYield, dietaryTags, specialty);
+      if (ingredients.length === 0) {
+        throw new GatewayError(404, `Recipe '${recipeKey}' not found in culinary ontology. Supported recipes: ${Object.keys(CULINARY_RECIPE_DATABASE).join(', ')}`);
+      }
+
+      res.json({
+        recipe_key: recipeKey,
+        target_yield: targetYield,
+        dietary_tags: dietaryTags,
+        specialty,
+        ingredients,
+      });
     })
   );
 
