@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
 import type { RAGProductContext } from './valioAimoRAG.ts';
 import type { TenantPolicy } from '../types/aimogate.ts';
@@ -41,7 +42,7 @@ export class GeminiClient {
       process.env.GEMINI_API_KEY ||
       process.env.GOOGLE_API_KEY ||
       '';
-    this.model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    this.model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
     if (this.apiKey) {
       try {
@@ -68,6 +69,47 @@ export class GeminiClient {
 
   public getModelName(): string {
     return this.model;
+  }
+
+  /**
+   * Helper that attempts generation with current model, automatically falling back
+   * to active Gemini models (gemini-flash-latest, gemini-3.8-flash) if 404/NOT_FOUND is returned.
+   */
+  private async generateContentWithFallback(params: {
+    contents: string;
+    systemInstruction: string;
+    temperature?: number;
+  }) {
+    if (!this.client) return null;
+    const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash'];
+    const uniqueModels = Array.from(new Set(candidateModels));
+
+    for (const model of uniqueModels) {
+      try {
+        const response = await this.client.models.generateContent({
+          model,
+          contents: params.contents,
+          config: {
+            systemInstruction: params.systemInstruction,
+            responseMimeType: 'application/json',
+            temperature: params.temperature ?? 0.1,
+          },
+        });
+        if (model !== this.model) {
+          console.log(`[GeminiClient] Automatically switched active model to: ${model}`);
+          this.model = model;
+        }
+        return response;
+      } catch (err: any) {
+        const msg = String(err?.message || '');
+        if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('no longer available')) {
+          console.warn(`[GeminiClient] Model '${model}' unavailable (${msg.slice(0, 100)}...), trying fallback...`);
+          continue;
+        }
+        throw err;
+      }
+    }
+    return null;
   }
 
   /**
@@ -121,17 +163,13 @@ ${candidatesSummary}
 Select the optimal SKU and return JSON.`;
 
     try {
-      const response = await this.client.models.generateContent({
-        model: this.model,
+      const response = await this.generateContentWithFallback({
         contents: userPrompt,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
+        systemInstruction,
+        temperature: 0.1,
       });
 
-      const text = response.text?.trim() || '';
+      const text = response?.text?.trim() || '';
       if (!text) return null;
 
       const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -203,17 +241,13 @@ Return strictly valid JSON conforming to this schema:
 }`;
 
     try {
-      const response = await this.client.models.generateContent({
-        model: this.model,
+      const response = await this.generateContentWithFallback({
         contents: `Extract the physical procurement line items to purchase from this prompt: "${prompt}"`,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
+        systemInstruction,
+        temperature: 0.1,
       });
 
-      const text = response.text?.trim() || '';
+      const text = response?.text?.trim() || '';
       if (!text) return null;
 
       const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
@@ -273,17 +307,13 @@ Always return valid JSON conforming to this schema:
 }`;
 
     try {
-      const response = await this.client.models.generateContent({
-        model: this.model,
+      const response = await this.generateContentWithFallback({
         contents: `Deconstruct this kitchen procurement prompt into raw ingredients and metric quantities: "${prompt}"`,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-          temperature: 0.1,
-        },
+        systemInstruction,
+        temperature: 0.1,
       });
 
-      const text = response.text?.trim() || '';
+      const text = response?.text?.trim() || '';
       if (!text) return null;
 
       const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();

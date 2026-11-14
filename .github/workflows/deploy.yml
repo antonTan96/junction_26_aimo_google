@@ -80,7 +80,7 @@ jobs:
             --memory=2Gi \
             --cpu=1 \
             --timeout=300 \
-            --set-env-vars="GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},GEMINI_MODEL=gemini-2.5-flash,VALIO_API_BASE_URL=https://junction26.valioaimo.fi,VALIO_API_KEY=${{ secrets.VALIO_API_KEY || 'junct_tDnQn4VI_nfhELGCOEkY4vbuxm324MmYmILuokYG03Y' }}"
+            --set-env-vars="GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }},GEMINI_MODEL=gemini-flash-latest,VALIO_API_BASE_URL=https://junction26.valioaimo.fi,VALIO_API_KEY=${{ secrets.VALIO_API_KEY || 'junct_tDnQn4VI_nfhELGCOEkY4vbuxm324MmYmILuokYG03Y' }}"
 
   deploy-firebase-hosting:
     name: Deploy Frontend to Firebase Hosting

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import http from 'node:http';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import path from 'node:path';
