@@ -18,6 +18,7 @@ import type {
   ZeroTrustInspectResponse,
 } from './types/aimogate';
 import { ShellLayout } from './components/ShellLayout';
+import { ThreePaneControlPlane } from './components/ThreePaneControlPlane';
 import { ProcurementGuardrailsView } from './components/ProcurementGuardrailsView';
 import { PromptSchedulerView } from './components/PromptSchedulerView';
 import { SafetyBudgetView } from './components/SafetyBudgetView';
@@ -32,7 +33,7 @@ interface ToastState {
 }
 
 export default function App() {
-  const [activeNav, setActiveNav] = useState<NavSectionId>('procurement-guardrails');
+  const [activeNav, setActiveNav] = useState<NavSectionId>('stage-demo');
   const [selectedTenant, setSelectedTenant] = useState<string>(DEFAULT_TENANT_ID);
   const role: PrincipalType = 'human';
   const [searchQuery, setSearchQuery] = useState('');
@@ -451,6 +452,27 @@ export default function App() {
               Dismiss
             </button>
           </div>
+        )}
+
+        {activeNav === 'stage-demo' && (
+          <ThreePaneControlPlane
+            customer={currentCustomer}
+            policy={policy}
+            orders={orders}
+            pendingOrders={pendingOrders}
+            auditLogs={auditLogs}
+            globalAuditLogs={globalAuditLogs}
+            zeroTrustData={zeroTrustData}
+            agentResponse={agentResponse}
+            isRunningAgent={isRunningAgent}
+            onRunAgent={handleRunAgent}
+            onUpdatePolicy={handleUpdatePolicy}
+            onApproveOrder={handleApproveOrder}
+            onRejectOrder={handleRejectOrder}
+            onAcceptSubstitution={handleAcceptSubstitution}
+            onRejectSubstitution={handleRejectSubstitution}
+            onResetDemo={handleResetDemo}
+          />
         )}
 
         {activeNav === 'procurement-guardrails' && (

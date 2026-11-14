@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Store,
+  Zap,
 } from 'lucide-react';
 import type {
   CustomerRosterItem,
@@ -40,7 +41,9 @@ const NAV_ITEMS: Array<{
   id: NavSectionId;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  flagship?: boolean;
 }> = [
+  { id: 'stage-demo', label: '3-Pane Stage Demo', icon: Zap, flagship: true },
   { id: 'procurement-guardrails', label: 'Allowed Items', icon: CheckSquare },
   { id: 'autonomous-prompt-scheduler', label: 'Orders & Approvals', icon: ShoppingBag },
   { id: 'safety-and-budget-limits', label: 'Spending Limits', icon: Sliders },
@@ -130,7 +133,8 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
             const Icon = item.icon;
             const active = activeNav === item.id;
             const showBadge =
-              item.id === 'autonomous-prompt-scheduler' && pendingOrders.length > 0;
+              (item.id === 'autonomous-prompt-scheduler' || item.id === 'stage-demo') &&
+              pendingOrders.length > 0;
 
             return (
               <button
@@ -143,7 +147,7 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
                 }}
                 className={`flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-xl text-sm text-left transition-colors cursor-pointer ${
                   active
-                    ? 'bg-surface-container-high text-on-surface font-semibold border border-outline-variant/60'
+                    ? 'bg-surface-container-high text-on-surface font-semibold border border-outline-variant/60 shadow-sm'
                     : 'text-on-surface-variant hover:bg-surface-container-high/50 hover:text-on-surface border border-transparent'
                 }`}
               >
@@ -155,11 +159,18 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
                   />
                   <span className="whitespace-nowrap truncate">{item.label}</span>
                 </span>
-                {showBadge && (
-                  <span className="text-xs font-semibold tabular-nums text-error shrink-0">
-                    {pendingOrders.length}
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {item.flagship && (
+                    <span className="text-[9.5px] font-bold px-1.5 py-0.2 rounded bg-primary/20 text-primary border border-primary/40 uppercase tracking-wider">
+                      STAGE
+                    </span>
+                  )}
+                  {showBadge && (
+                    <span className="text-xs font-semibold tabular-nums text-error shrink-0">
+                      {pendingOrders.length}
+                    </span>
+                  )}
+                </div>
               </button>
             );
           })}

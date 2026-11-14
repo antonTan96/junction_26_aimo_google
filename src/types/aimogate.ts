@@ -133,6 +133,8 @@ export interface OrderDTO {
   items?: OrderItemDTO[] | null;
   recipe_name?: string | null;
   substitution_request?: SubstitutionRequestDTO | null;
+  fulfillment_tiers?: GoodBetterBestTiers | null;
+  tiers?: GoodBetterBestTiers | null;
 }
 
 export type ProcurementRequestType = 'single_item' | 'multi_item' | 'recipe';
@@ -270,6 +272,51 @@ export interface AgentStepTrace {
   tool_output?: unknown;
 }
 
+export interface FulfillmentTierItem {
+  tier: 'BEST' | 'BETTER' | 'GOOD';
+  title: string;
+  badge?: string;
+  sku?: string;
+  product_name?: string;
+  pack_format?: string;
+  pack_volume_litres?: number;
+  available_packs?: number;
+  requested_packs?: number;
+  allocated_packs?: number;
+  allocated_volume_litres?: number;
+  total_volume_litres?: number;
+  unit_price_eur?: number;
+  total_price_eur?: number;
+  price_per_litre_eur?: number;
+  stock_coverage_pct?: number;
+  requires_substitution_approval?: boolean;
+  notes?: string;
+  components?: Array<{
+    sku: string;
+    product_name: string;
+    pack_format: string;
+    packs: number;
+    volume_litres: number;
+    unit_price_eur: number;
+    total_price_eur: number;
+  }>;
+}
+
+export interface GoodBetterBestTiers {
+  requested_volume_litres: number;
+  requested_sku?: string;
+  requested_product_name?: string;
+  best: FulfillmentTierItem;
+  better: FulfillmentTierItem;
+  good: FulfillmentTierItem;
+}
+
+export interface OfferSearchResponse {
+  offers: PublicOfferDTO[];
+  tiers?: GoodBetterBestTiers | null;
+  fulfillment_tiers?: GoodBetterBestTiers | null;
+}
+
 export interface AgentRunResponse {
   success: boolean;
   mode_used: string;
@@ -279,6 +326,8 @@ export interface AgentRunResponse {
   order?: OrderDTO | null;
   summary_message: string;
   preprocessed_prompt?: PreprocessedPromptResult;
+  fulfillment_tiers?: GoodBetterBestTiers | null;
+  tiers?: GoodBetterBestTiers | null;
 }
 
 export interface CustomerRosterItem {
@@ -379,6 +428,7 @@ export interface NetworkOverview {
 }
 
 export type NavSectionId =
+  | 'stage-demo'
   | 'procurement-guardrails'
   | 'autonomous-prompt-scheduler'
   | 'safety-and-budget-limits'

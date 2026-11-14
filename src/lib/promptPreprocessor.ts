@@ -660,9 +660,9 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
     /\bfind\s+an\s+option\b/gi,
     /\bfixed\s+contract\s+prices?\b/gi,
     /\bcontract\s+prices?\b/gi,
-    /\bwithin\s+policy(?:\s+limits)?\b/gi,
+    /\(?\bwithin\s+policy(?:\s+limits)?\b\)?/gi,
     /\bautonomous\s+purchasing\b/gi,
-    /\b(?:by|before|until|for)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
+    /\b(?:by|before|until|on|next|this|for)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
     /\b(?:for\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
     /\b(?:morning|afternoon|evening)\s+delivery\b/gi,
     /\bavailability\b/gi,
@@ -673,7 +673,8 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
   }
 
   cleanInput = cleanInput
-    .replace(/(\d+),(\d{3})\b/g, '$1$2')
+    .replace(/(\d+),(\d{3})(?=\D|$)/g, '$1$2')
+    .replace(/\(\s*\)/g, ' ')
     .replace(/^(?:recipe\s+for\s+[^:,\n]+[:,\-]|resepti\s*:\s*|ingredients\s*:\s*|ainekset\s*:\s*)/i, '')
     .replace(/\s*\.\s*/g, ', ')
     .trim();
@@ -993,6 +994,33 @@ export function preprocessBuyerPromptSync(
         notes: `Structured explicit kitchen recipe with ${items.length} line item ingredients.`,
       };
     }
+  }
+
+  // 2.5. Check for adversarial system override attempt
+  const isAdversarial = /\b(?:system\s+override|ignore\s+(?:spend\s+)?limits|bypass\s+policy|override\s+policy)\b/i.test(prompt);
+  if (isAdversarial) {
+    const eurMatch = prompt.match(/€\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*€/);
+    const cost = eurMatch ? parseFloat((eurMatch[1] || eurMatch[2]).replace(/,/g, '')) : 4500.0;
+    const estVol = Math.round(cost / 1.18);
+    return {
+      raw_prompt: prompt,
+      request_type: 'single_item',
+      dietary_tags: dietaryTags,
+      deliver_by: deliverBy,
+      items: [
+        {
+          ingredient_name: 'dairy',
+          search_query: 'dairy',
+          quantity: estVol,
+          unit: 'L',
+          category_hint: 'dairy',
+          dietary_tags: dietaryTags,
+          importance: 'essential',
+          culinary_role: 'Adversarial override probe',
+        },
+      ],
+      notes: 'Adversarial override probe detected. Flagged for Policy Firewall interception.',
+    };
   }
 
   // 3. Identify if prompt contains multiple materials joined by "and", commas, or line breaks
