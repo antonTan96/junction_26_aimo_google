@@ -11,7 +11,9 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "deploy": "npm run build && firebase deploy",
+    "deploy:full": "./deploy.sh",
     "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy:run": "gcloud run deploy aimogate-api --project=junction26hel-7631 --source=. --region=europe-north1 --allow-unauthenticated",
     "deploy:firestore": "firebase deploy --only firestore:rules"
   },
   "dependencies": {
