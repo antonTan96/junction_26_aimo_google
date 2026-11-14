@@ -333,7 +333,7 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
   // (?:l|litres?|litraa?|kg|kiloa?|g|grammaa?|kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?)
   const volMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?)\b/i);
   const gramMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:g|gram|grams|grammaa?)\b/i);
-  const qtyMatch = text.match(/([\d,]+)\s*(?:kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|croissants?|cases?|cartons?)\b/i);
+  const qtyMatch = text.match(/\b([\d,]+)\s*(?:(?:[\w-]+\s+){0,3})?(?:kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|croissants?|cases?|cartons?|cookies?|keksejä|keksiä|keksi|biscuits?)\b/i);
 
   let volumeLitres = 1000.0;
   if (volMatch) {
@@ -341,7 +341,14 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
   } else if (gramMatch) {
     volumeLitres = parseFloat(gramMatch[1].replace(/,/g, '')) / 1000.0;
   } else if (qtyMatch) {
-    volumeLitres = parseFloat(qtyMatch[1].replace(/,/g, '')) * 3.25;
+    const qty = parseFloat(qtyMatch[1].replace(/,/g, ''));
+    if (text.includes('croissant')) {
+      volumeLitres = qty * 3.25;
+    } else if (text.includes('cookie') || text.includes('keksi') || text.includes('biscuit')) {
+      volumeLitres = qty;
+    } else {
+      volumeLitres = qty * 3.25;
+    }
   }
 
   // 2. Extract possible short tags based on the prompt:
@@ -356,24 +363,30 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
     .replace(/\bfor\s+(?:the\s+)?cafeteria\b/gi, '')
     .replace(/\bfor\s+(?:our\s+|the\s+)?(?:kitchen|restaurant|hotel\s+kitchen|hotel\s+breakfast|hotel)\b/gi, '')
     .replace(/\bfor\s+breakfast\b/gi, '')
+    .replace(/\bfor\s+(?:a|our|the)?\s*(?:wedding|banquet|conference|buffet|service|dinner|lunch|event|party|reception)(?:\s+event)?\b/gi, '')
+    .replace(/\ba\s+wedding\s+event\b/gi, '')
+    .replace(/\bevent\b/gi, '')
     .replace(/\bleivontaan\b/gi, '')
     .replace(/\b(?:varten|meille)\b/gi, '')
-    // Strip action prefixes:
+    // Strip action and meta prefixes:
     .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme|tilataan)\s+/gi, '')
+    .replace(/\bingredients\s+(?:for\s+)?/gi, '')
     .replace(/^urgent\s+delivery\s+of\s+/gi, '')
     .replace(/\burgent(?:ly)?\b/gi, '')
     // Strip delivery date / time / urgency clauses:
     .replace(/\b(?:find\s+an\s+option|check\s+(?:price|availability)).*$/gi, '')
-    .replace(/\b(?:by|before|until|on)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?\b/gi, '')
+    .replace(/\b(?:by|before|until|on|next|this)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?\b/gi, '')
     .replace(/\b(?:by|before|until)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, '')
     .replace(/\b(?:before|after)\s+\d+\s*(?:am|pm)?\b/gi, '')
     .replace(/\b(?:by|before|until)\s+[\w\d\s,.-]+$/gi, '')
     // Strip quantity expressions with units:
-    .replace(/([\d,]+(?:\.\d+)?)\s*(?:l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?|g|gram|grams|grammaa?|kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|cases?|cartons?)\b/gi, '')
+    .replace(/([\d,]+(?:\.\d+)?)\s*(?:l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?|g|gram|grams|grammaa?|kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|croissants?|cases?|cartons?|cookies?|keksejä|keksiä|keksi|biscuits?)\b/gi, '')
     .replace(/\b(?:of|for)\b/gi, ' ')
     .replace(/[.,;!?]+$/, '')
     .replace(/\s+/g, ' ')
     .trim();
+
+  cleaned = cleaned.replace(/^[\d,]+(?:\.\d+)?\s+/, '').trim();
 
   // 4. Extract product intent accurately:
   let query = '';
@@ -389,6 +402,8 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
     query = 'whole milk';
   } else if (cleaned.length > 0) {
     query = cleaned;
+  } else if (text.includes('cookie') || text.includes('keksi') || text.includes('biscuit') || text.includes('pikkuleipä')) {
+    query = 'cookies';
   } else if (text.includes('butter') || text.includes('voi')) {
     query = 'cooking butter';
   } else if (text.includes('whole milk') || text.includes('täysmaito')) {
@@ -1067,7 +1082,7 @@ export class AimoGateStore {
         if (!this.stock.has(dynamicSku)) {
           this.stock.set(dynamicSku, {
             sku: dynamicSku,
-            available_packs: 500,
+            available_packs: 1000,
             reserved_packs: 0,
           });
         }
@@ -1800,7 +1815,10 @@ export class AimoGateStore {
       };
     }
 
-    const bestOffer = offers[0];
+    const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);
+    const pool = inStockOffers.length > 0 ? inStockOffers : offers;
+    const bestOffer = pool[0];
+    const packsToLock = Math.min(bestOffer.packs_required ?? 1, Math.max(1, bestOffer.available_packs));
     const comparisonNotes = offers
       .map(
         (o) =>
@@ -1811,19 +1829,19 @@ export class AimoGateStore {
     traces.push({
       step_number: 3,
       title: 'Autonomous Unit-Economics Optimization',
-      description: `Evaluated options: ${comparisonNotes}. Selected SKU '${bestOffer.sku}' (${bestOffer.pack_format}) with lowest unit cost €${bestOffer.price_per_litre_eur.toFixed(2)}/L (Total: €${(bestOffer.total_contract_price_eur ?? 0).toFixed(2)} for ${bestOffer.packs_required} packs).`,
+      description: `Evaluated options: ${comparisonNotes}. Selected SKU '${bestOffer.sku}' (${bestOffer.pack_format}) with lowest unit cost €${bestOffer.price_per_litre_eur.toFixed(2)}/L (Total: €${(bestOffer.total_contract_price_eur ?? 0).toFixed(2)} for ${packsToLock} packs).`,
       action_type: 'reasoning',
       latency_ms: 9,
       tool_output: {
         selected_sku: bestOffer.sku,
-        packs_required: bestOffer.packs_required,
+        packs_required: packsToLock,
         total_contract_price_eur: bestOffer.total_contract_price_eur,
       },
     });
 
     const quote = this.lockQuote(principal, {
       sku: bestOffer.sku,
-      pack_quantity: bestOffer.packs_required ?? 1,
+      pack_quantity: packsToLock,
       deliver_by: parsed.deliver_by,
     });
 

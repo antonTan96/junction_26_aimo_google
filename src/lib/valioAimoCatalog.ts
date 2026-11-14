@@ -34,6 +34,9 @@ const UPSTREAM_API_KEY =
  */
 export function normalizeFinnishToken(token: string): string {
   const t = token.toLowerCase();
+  if (t === 'keksiä' || t === 'keksejä' || t === 'keksit') return 'keksi';
+  if (t === 'pikkuleipiä' || t === 'pikkuleivät') return 'pikkuleipä';
+  if (t === 'pipareita' || t === 'piparit' || t === 'piparkakkuja') return 'piparkakku';
   if (t.length <= 4) return t;
 
   // Preserve abessive adjective ending -ton / -tön (e.g. laktoositon, rasvaton, gluteeniton, maidoton)
@@ -181,6 +184,7 @@ export const SYNONYM_GROUPS: string[][] = [
   ['coffee', 'kahvi', 'espresso', 'kahvipapu', 'pavut', 'kaffe'],
   ['oat', 'kaura', 'kaurajuoma', 'kauramaito', 'oat milk', 'oat drink', 'oddlygood', 'oatly', 'havredryck'],
   ['croissant', 'voicroissant'],
+  ['cookie', 'cookies', 'keksi', 'keksit', 'keksejä', 'keksiä', 'biscuit', 'biscuits', 'pikkuleipä', 'pikkuleivät', 'pikkuleipiä', 'pipari', 'piparkakku', 'piparkakkuja'],
   ['bread', 'leipä', 'sämpylä', 'bröd'],
   ['sour cream', 'kermaviili', 'smetana', 'hapankerma', 'creme fraiche', 'crème fraîche', 'gräddfil'],
   ['pintadesinfektio', 'desinfektio', 'sanitizer', 'hygiene', 'disinfectant', 'easydes', 'hygienia'],
@@ -550,7 +554,44 @@ export class ValioAimoCatalogService {
     if (isVegan && (text.includes('kaura') || text.includes('oat') || text.includes('soija') || text.includes('barista') || text.includes('vegaani'))) {
       return 'plant-based';
     }
+
+    const isIceCream =
+      text.includes('jäätelö') ||
+      text.includes('ice cream') ||
+      text.includes('glass') ||
+      text.includes('gelato') ||
+      text.includes('breyers') ||
+      (text.includes('cream') && (text.includes('pakaste') || tags.includes('freezetemperature') || tags.includes('frozen')));
+    const isCookieOrBakery =
+      text.includes('keksi') ||
+      text.includes('cookie') ||
+      text.includes('biscuit') ||
+      text.includes('pikkuleipä') ||
+      text.includes('pipari') ||
+      text.includes('piparkakku') ||
+      text.includes('vohveli') ||
+      text.includes('korppu') ||
+      text.includes('muffinssi') ||
+      text.includes('donitsi') ||
+      text.includes('wiener') ||
+      text.includes('torttu') ||
+      text.includes('leipä') ||
+      text.includes('bread') ||
+      text.includes('croissant') ||
+      text.includes('sämpylä') ||
+      text.includes('kakku') ||
+      text.includes('pulla') ||
+      text.includes('piirakka') ||
+      text.includes('bakery') ||
+      text.includes('pastry');
+
+    // Cookies and baked goods should be categorized as bakery, even if they contain butter/milk
+    if (!isIceCream && isCookieOrBakery) {
+      return 'bakery';
+    }
+
     if (
+      isIceCream ||
       text.includes('maito') ||
       text.includes('milk') ||
       text.includes('kerma') ||
@@ -581,17 +622,7 @@ export class ValioAimoCatalogService {
     ) {
       return 'dairy';
     }
-    if (
-      text.includes('leipä') ||
-      text.includes('bread') ||
-      text.includes('croissant') ||
-      text.includes('sämpylä') ||
-      text.includes('kakku') ||
-      text.includes('pulla') ||
-      text.includes('piirakka') ||
-      text.includes('bakery') ||
-      text.includes('pastry')
-    ) {
+    if (isCookieOrBakery) {
       return 'bakery';
     }
     if (
@@ -599,8 +630,7 @@ export class ValioAimoCatalogService {
       text.includes('coffee') ||
       text.includes('mehu') ||
       text.includes('juice') ||
-      text.includes('tee') ||
-      text.includes('tea') ||
+      /\b(tee|teetä|tea)\b/i.test(text) ||
       text.includes('juoma') ||
       text.includes('beverage') ||
       text.includes('paulig')
@@ -832,6 +862,19 @@ export class ValioAimoCatalogService {
     const hasMilkIntent = normalizedWords.some((w) => ['milk', 'maito', 'täysmaito', 'kevytmaito'].includes(w));
     const hasWholeMilkIntent = normalizedWords.some((w) => ['täysmaito'].includes(w)) || cleanQ.includes('whole milk');
     const hasKevytmaitoIntent = normalizedWords.some((w) => ['kevytmaito', 'semi-skimmed', 'semi skimmed'].includes(w)) || cleanQ.includes('semi skimmed');
+    const hasCookieIntent =
+      normalizedWords.some((w) =>
+        ['cookie', 'cookies', 'keksi', 'keksit', 'keksejä', 'keksiä', 'biscuit', 'biscuits', 'pikkuleipä', 'pikkuleivät', 'pikkuleipiä', 'pipari', 'piparkakku'].includes(w)
+      ) ||
+      cleanQ.includes('cookie') ||
+      cleanQ.includes('keksi') ||
+      cleanQ.includes('biscuit') ||
+      cleanQ.includes('pikkuleipä');
+
+    const DIETARY_OR_GENERIC_TOKENS = new Set([
+      'gluten', 'free', 'lactose', 'vegan', 'organic', 'luomu', 'gton', 'lton',
+      'fresh', 'tuore', 'valio', 'dairy', 'milk', 'cheese', 'bread', 'food'
+    ]);
 
     const distinctiveWords = normalizedWords.filter((w) => !GENERIC_MODIFIERS.has(w));
 
@@ -940,6 +983,44 @@ export class ValioAimoCatalogService {
         }
       }
 
+      // 9. For cookie intent, strictly exclude pizza, pizza bases, burger buns, breadcrumbs, and frozen ice creams
+      if (hasCookieIntent) {
+        if (
+          lowerDisplay.includes('pizza') ||
+          lowerFi.includes('pizzapohja') ||
+          lowerFi.includes('pizza') ||
+          lowerDisplay.includes('burger bun') ||
+          lowerDisplay.includes('breadcrumbs') ||
+          lowerFi.includes('korppujauho') ||
+          lowerDisplay.includes('sauce base') ||
+          lowerDisplay.includes('soup base') ||
+          lowerDisplay.includes('salad base') ||
+          (lowerDisplay.includes('flatbread') && !lowerDisplay.includes('cookie'))
+        ) {
+          continue;
+        }
+
+        const asksIceCream = cleanQ.includes('ice cream') || cleanQ.includes('jäätelö') || cleanQ.includes('glass') || cleanQ.includes('gelato');
+        if (!asksIceCream) {
+          const isFrozenIceCream =
+            lowerDisplay.includes('ice cream') ||
+            lowerFi.includes('jäätelö') ||
+            lowerDisplay.includes('jäätelö') ||
+            lowerDisplay.includes('glass') ||
+            lowerDisplay.includes('breyers') ||
+            lowerDisplay.includes('gelatolab') ||
+            lowerBrand.includes('breyers') ||
+            lowerBrand.includes('gelatolab') ||
+            lowerBrand.includes('magnum') ||
+            lowerBrand.includes('carte d\'or') ||
+            (lowerDisplay.includes('cream') && (p.temperature_condition === 7 || pTags.includes('freezetemperature') || pTags.includes('frozen'))) ||
+            (p.category === 'dairy' && p.temperature_condition === 7);
+          if (isFrozenIceCream) {
+            continue;
+          }
+        }
+      }
+
       let score = 0;
       let matchedCount = 0;
       let matchedDistinctiveCount = 0;
@@ -980,7 +1061,7 @@ export class ValioAimoCatalogService {
             if (allVariants.some((v) => matchesDisplay(v))) {
               score += isDistinctive ? 60 : 15;
             }
-            if (allVariants.some((v) => lowerBrand.includes(v))) {
+            if (!DIETARY_OR_GENERIC_TOKENS.has(w) && allVariants.some((v) => lowerBrand.includes(v))) {
               score += isDistinctive ? 40 : 10;
             }
             if (p.id.toLowerCase() === w || p.id.toLowerCase() === rawW) {
@@ -1005,8 +1086,8 @@ export class ValioAimoCatalogService {
           score += 150;
         }
 
-        // Brand match bonus
-        if (normalizedWords.some((w) => lowerBrand.includes(w))) {
+        // Brand match bonus - only for actual distinctive brand terms
+        if (normalizedWords.some((w) => !DIETARY_OR_GENERIC_TOKENS.has(w) && lowerBrand.includes(w))) {
           score += 100;
         }
 
@@ -1048,6 +1129,12 @@ export class ValioAimoCatalogService {
           }
         }
 
+        if ((cleanQ.includes('bread') || cleanQ.includes('leipä')) && !cleanQ.includes('breadcrumb') && !cleanQ.includes('korppujauho') && !cleanQ.includes('gingerbread') && !cleanQ.includes('piparkakku')) {
+          if (lowerDisplay.includes('breadcrumb') || lowerFi.includes('korppujauho') || lowerDisplay.includes('gingerbread')) {
+            score -= 300;
+          }
+        }
+
         if (cleanQ.includes('sour cream')) {
           if (
             lowerDisplay.includes('sour cream') ||
@@ -1079,6 +1166,18 @@ export class ValioAimoCatalogService {
           }
           if (lowerDisplay.includes('block') || lowerFi.includes('pala')) {
             score += 50;
+          }
+        }
+
+        if (hasCookieIntent) {
+          const isActualCookie =
+            /\b(cookies?|keksi[a-z]*|biscuits?|pikkuleip[a-z]*|pipar[a-z]*)\b/i.test(lowerDisplay) ||
+            /\b(cookies?|keksi[a-z]*|biscuits?|pikkuleip[a-z]*|pipar[a-z]*)\b/i.test(lowerFi);
+          if (isActualCookie) {
+            score += 250;
+          }
+          if (p.category === 'bakery') {
+            score += 100;
           }
         }
 

@@ -80,3 +80,41 @@ test('RAG Pipeline: Augments prompt with catalog candidates and enforces policy 
   assert.equal(result2.agentResponse.final_status, 'PENDING_APPROVAL');
   assert.equal(result2.agentResponse.order?.status, 'PENDING_APPROVAL');
 });
+
+test('Cookie Intent: "cookies" returns authentic bakery cookies and never pizza base or ice cream', async () => {
+  const catalog = ValioAimoCatalogService.getInstance();
+  const ragService = ValioAimoRAGService.getInstance();
+
+  const mockPolicy: TenantPolicy = {
+    tenant_id: DEFAULT_TENANT_ID,
+    tenant_name: 'Nordic Crown Hotels (Helsinki)',
+    max_auto_approve_eur: 5000,
+    max_auto_approve_litres: 5000,
+    allowed_categories: ['dairy', 'plant-based', 'bakery'],
+    anomaly_sensitivity_pct: 10,
+    auto_dispute_enabled: true,
+    category_rules: {},
+  };
+
+  // 1. Direct Catalog Search for "cookies"
+  const cookieCandidates = catalog.search('cookies', { limit: 8 });
+  assert.ok(cookieCandidates.length > 0, 'Should find cookies');
+  for (const c of cookieCandidates) {
+    const text = (c.display_name + ' ' + c.name_fi).toLowerCase();
+    assert.ok(!text.includes('pizza'), `Candidate ${c.id} should not be pizza`);
+    assert.ok(!text.includes('pohja'), `Candidate ${c.id} should not be pizza base`);
+    assert.ok(!text.includes('ice cream') && !text.includes('jäätelö'), `Candidate ${c.id} should not be ice cream`);
+    assert.equal(c.category, 'bakery', `Candidate ${c.id} should be categorized as bakery`);
+  }
+
+  // 2. RAG Pipeline execution for gluten-free wedding cookies prompt
+  const weddingRes = await ragService.executeRAGPipeline({
+    prompt: 'I need ingredients for 1,000 gluten-free licorice cookies for a wedding event next Thursday.',
+    policy: mockPolicy,
+  });
+
+  assert.ok(weddingRes.selectedProduct !== null, 'Should select a product');
+  const selName = (weddingRes.selectedProduct.product.display_name + ' ' + weddingRes.selectedProduct.product.name_fi).toLowerCase();
+  assert.ok(!selName.includes('pizza'), 'Selected product must not be pizza base');
+  assert.equal(weddingRes.selectedProduct.product.category, 'bakery', 'Selected product must be bakery');
+});
