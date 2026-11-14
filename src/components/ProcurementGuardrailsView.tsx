@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   History,
   Tag,
@@ -13,11 +13,25 @@ import {
   Wine,
   ArrowRight,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   Eye,
+  Clock,
+  Calendar,
+  CalendarCheck,
+  AlertTriangle,
+  ShieldCheck,
+  Check,
+  RotateCcw,
+  Sliders,
+  Gauge,
+  Info,
 } from 'lucide-react';
 import type {
   AuditLogEntry,
+  CategoryRule,
+  CategoryRuleUsageDTO,
+  CategoryTimeWindow,
   CustomerRosterItem,
   GuardrailWhitelistDTO,
   NavSectionId,
@@ -36,6 +50,10 @@ interface ProcurementGuardrailsViewProps {
   onPublishPolicies: () => void;
   onOpenZeroTrustModal: () => void;
   onNavigate: (nav: NavSectionId) => void;
+  onUpdateCategoryRule?: (
+    category: string,
+    patch: Partial<Omit<CategoryRule, 'category'>>
+  ) => Promise<void>;
 }
 
 const CATEGORY_METADATA: Record<
@@ -91,6 +109,478 @@ const CATEGORY_METADATA: Record<
   },
 };
 
+function getWindowLabel(window: CategoryTimeWindow | undefined): string {
+  switch (window) {
+    case 'weekly':
+      return 'Weekly';
+    case 'daily':
+      return 'Daily';
+    case 'monthly':
+      return 'Monthly';
+    case 'none':
+    default:
+      return 'Per-order';
+  }
+}
+
+function getWindowUnit(window: CategoryTimeWindow | undefined): string {
+  switch (window) {
+    case 'weekly':
+      return '/week';
+    case 'daily':
+      return '/day';
+    case 'monthly':
+      return '/month';
+    case 'none':
+    default:
+      return '';
+  }
+}
+
+function formatRuleValidUntil(validUntil: string | null | undefined): string {
+  if (!validUntil) return 'No expiration (Perpetual)';
+  const date = new Date(validUntil);
+  if (isNaN(date.getTime())) return validUntil;
+  return date.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+interface CategoryRuleEditorProps {
+  category: string;
+  categoryTitle: string;
+  ruleUsage: CategoryRuleUsageDTO | undefined;
+  defaultMaxLitres: number;
+  onSave?: (
+    category: string,
+    patch: Partial<Omit<CategoryRule, 'category'>>
+  ) => Promise<void>;
+  onClose: () => void;
+}
+
+const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
+  category,
+  categoryTitle,
+  ruleUsage,
+  defaultMaxLitres,
+  onSave,
+  onClose,
+}) => {
+  const currentWindow: CategoryTimeWindow = ruleUsage?.time_window ?? 'weekly';
+  const currentMax = ruleUsage?.max_storage_litres ?? defaultMaxLitres;
+  const currentValidUntil = ruleUsage?.rule_valid_until ?? null;
+
+  const [maxStorage, setMaxStorage] = useState<number>(currentMax);
+  const [timeWindow, setTimeWindow] = useState<CategoryTimeWindow>(currentWindow);
+  const [validUntil, setValidUntil] = useState<string | null>(currentValidUntil);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMaxStorage(ruleUsage?.max_storage_litres ?? defaultMaxLitres);
+    setTimeWindow(ruleUsage?.time_window ?? 'weekly');
+    setValidUntil(ruleUsage?.rule_valid_until ?? null);
+  }, [ruleUsage, defaultMaxLitres]);
+
+  const handleExtendDays = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() + days);
+    d.setHours(23, 59, 59, 999);
+    setValidUntil(d.toISOString());
+  };
+
+  const handleSetPerpetual = () => {
+    setValidUntil(null);
+  };
+
+  const handleCustomDateChange = (dateStr: string) => {
+    if (!dateStr) {
+      setValidUntil(null);
+      return;
+    }
+    const d = new Date(`${dateStr}T23:59:59.999Z`);
+    setValidUntil(d.toISOString());
+  };
+
+  const dateInputValue = validUntil ? validUntil.split('T')[0] : '';
+  const isExpired = validUntil ? Date.now() > new Date(validUntil).getTime() : false;
+  const daysRemaining = validUntil
+    ? Math.max(0, Math.ceil((new Date(validUntil).getTime() - Date.now()) / 86400000))
+    : null;
+
+  const handleSave = async () => {
+    if (!onSave) return;
+    setIsSaving(true);
+    setErrorMessage(null);
+    setSaveSuccess(false);
+    try {
+      await onSave(category, {
+        max_storage_litres: Number(maxStorage),
+        time_window: timeWindow,
+        rule_valid_until: validUntil,
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 3500);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to save category rule';
+      setErrorMessage(msg);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    setMaxStorage(currentMax);
+    setTimeWindow(currentWindow);
+    setValidUntil(currentValidUntil);
+    setErrorMessage(null);
+  };
+
+  const consumed = ruleUsage?.current_period_consumed_litres ?? 0;
+  const usagePct = maxStorage > 0 ? Math.min(100, Math.round((consumed / maxStorage) * 100)) : 0;
+  const windowLabel = getWindowLabel(timeWindow);
+  const windowUnit = getWindowUnit(timeWindow);
+
+  const storagePresets = [250, 500, 1000, 2500, 5000];
+  const windowOptions: Array<{ value: CategoryTimeWindow; label: string; sub: string }> = [
+    { value: 'weekly', label: 'Weekly', sub: 'Rolling 7 days' },
+    { value: 'daily', label: 'Daily', sub: 'Rolling 24 hours' },
+    { value: 'monthly', label: 'Monthly', sub: 'Rolling 30 days' },
+    { value: 'none', label: 'Per-order', sub: 'No time window' },
+  ];
+
+  return (
+    <div className="mt-4 pt-4 border-t border-outline-variant/30 flex flex-col gap-5 text-on-surface">
+      {/* Rule Status Header Banner */}
+      {isExpired ? (
+        <div className="p-3.5 rounded-xl bg-error-container/40 border border-error/40 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-error shrink-0 mt-0.5" />
+          <div className="space-y-0.5 min-w-0">
+            <div className="text-sm font-semibold text-error">
+              Rule expired - requires human approval
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              The auto-approve window for {categoryTitle} expired on{' '}
+              <span className="font-medium text-on-surface">{formatRuleValidUntil(validUntil)}</span>.
+              New orders currently require human review until you renew or extend this rule.
+            </p>
+          </div>
+        </div>
+      ) : validUntil ? (
+        <div className="p-3.5 rounded-xl bg-primary-container/30 border border-primary/30 flex items-start gap-3">
+          <CalendarCheck className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+          <div className="space-y-0.5 min-w-0">
+            <div className="text-sm font-semibold text-primary">
+              Rule active until {formatRuleValidUntil(validUntil)} ({daysRemaining}{' '}
+              {daysRemaining === 1 ? 'day' : 'days'} remaining)
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              During this active window, orders auto-approve without repeated manual approvals as long as
+              cumulative volume stays within your configured {windowLabel.toLowerCase()} cap.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="p-3.5 rounded-xl bg-surface-container-high border border-outline-variant/40 flex items-start gap-3">
+          <ShieldCheck className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+          <div className="space-y-0.5 min-w-0">
+            <div className="text-sm font-semibold text-on-surface">
+              Standing rule: Perpetual (No expiration date)
+            </div>
+            <p className="text-xs text-on-surface-variant">
+              Orders auto-approve without expiring, evaluated continuously against your volume limit.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Usage Meter & Volume Overview */}
+      <div className="p-4 rounded-xl bg-surface-container-lowest/70 border border-outline-variant/40 flex flex-col gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Gauge className="w-4 h-4 text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
+              {windowLabel} Storage Usage Meter
+            </span>
+          </div>
+          <div className="text-xs font-medium text-on-surface tabular-nums">
+            <span className="text-primary font-semibold">{consumed.toFixed(1)}L</span> used of{' '}
+            <span className="font-semibold">{maxStorage.toLocaleString()}L</span> limit
+            {windowUnit && <span className="text-on-surface-variant">{windowUnit}</span>}
+          </div>
+        </div>
+
+        {/* Meter Bar */}
+        <div className="w-full bg-surface-container-highest h-2.5 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all duration-300 ${
+              consumed >= maxStorage
+                ? 'bg-error'
+                : usagePct >= 80
+                ? 'bg-amber-400'
+                : 'bg-primary'
+            }`}
+            style={{ width: `${Math.min(100, Math.max(consumed > 0 ? 4 : 0, usagePct))}%` }}
+          />
+        </div>
+
+        <div className="flex items-center justify-between text-[11px] text-on-surface-variant tabular-nums">
+          <span>0 L</span>
+          <span>{usagePct}% consumed in active cycle</span>
+          <span>
+            {Math.max(0, maxStorage - consumed).toFixed(1)}L available capacity
+          </span>
+        </div>
+      </div>
+
+      {/* Edit Form Section */}
+      <div className="p-4 rounded-xl bg-surface-container-high/60 border border-outline-variant/40 flex flex-col gap-4">
+        <div className="flex items-center justify-between border-b border-outline-variant/30 pb-2">
+          <div className="flex items-center gap-2 text-sm font-semibold text-on-surface">
+            <Sliders className="w-4 h-4 text-primary" />
+            <span>Configure Category Guardrails</span>
+          </div>
+          <span className="text-xs text-on-surface-variant">
+            Updates take effect immediately on next order
+          </span>
+        </div>
+
+        {/* 1. Max Storage Volume Input & Presets */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between text-xs">
+            <label htmlFor={`max-storage-${category}`} className="font-medium text-on-surface">
+              Max Storage Volume Limit (Litres)
+            </label>
+            <span className="text-on-surface-variant text-[11px]">
+              Orders exceeding this in the time window trigger human review
+            </span>
+          </div>
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <div className="relative flex-1">
+              <input
+                id={`max-storage-${category}`}
+                type="number"
+                min="1"
+                max="500000"
+                step="50"
+                value={maxStorage || ''}
+                onChange={(e) => setMaxStorage(Math.max(0, Number(e.target.value)))}
+                className="w-full h-9 rounded-lg bg-surface-container-lowest border border-outline-variant/60 px-3 text-sm font-medium text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/60 tabular-nums"
+                placeholder="e.g. 1000"
+              />
+              <span className="absolute right-3 top-2 text-xs font-semibold text-on-surface-variant pointer-events-none">
+                Litres (L)
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+              {storagePresets.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => setMaxStorage(preset)}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                    maxStorage === preset
+                      ? 'bg-primary text-on-primary font-semibold'
+                      : 'bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface'
+                  }`}
+                >
+                  {preset.toLocaleString()}L
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* 2. Time Period Window (Weekly / Daily / Monthly / None) */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between text-xs">
+            <label className="font-medium text-on-surface">
+              Time Period Aggregation Window
+            </label>
+            <span className="text-on-surface-variant text-[11px]">
+              Reset interval for volume quota calculation
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            {windowOptions.map((opt) => {
+              const isSelected = timeWindow === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setTimeWindow(opt.value)}
+                  className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition-all cursor-pointer ${
+                    isSelected
+                      ? 'bg-primary/10 border-primary text-on-surface ring-1 ring-primary/40'
+                      : 'bg-surface-container border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-outline-variant'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className={`text-xs font-semibold ${isSelected ? 'text-primary' : ''}`}>
+                      {opt.label}
+                    </span>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-primary" />}
+                  </div>
+                  <span className="text-[11px] text-on-surface-variant/75">{opt.sub}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* 3. Rule Time Limit (Set / Extend) */}
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between text-xs">
+            <label className="font-medium text-on-surface flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-primary" />
+              <span>Set or Extend Rule Time Limit</span>
+            </label>
+            <span className="text-on-surface-variant text-[11px]">
+              Auto-approve orders without repetitive owner sign-offs
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-2.5">
+            {/* Quick Extension Chips */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-on-surface-variant mr-1">Quick extend:</span>
+              <button
+                type="button"
+                onClick={() => handleExtendDays(7)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-primary/50 transition-colors cursor-pointer"
+              >
+                +7 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExtendDays(14)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-primary/50 transition-colors cursor-pointer"
+              >
+                +14 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExtendDays(30)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-primary/50 transition-colors cursor-pointer"
+              >
+                +30 Days
+              </button>
+              <button
+                type="button"
+                onClick={() => handleExtendDays(90)}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-primary/50 transition-colors cursor-pointer"
+              >
+                +90 Days
+              </button>
+              <button
+                type="button"
+                onClick={handleSetPerpetual}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  validUntil === null
+                    ? 'bg-primary text-on-primary font-semibold'
+                    : 'bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface hover:border-primary/50'
+                }`}
+              >
+                No limit (Perpetual)
+              </button>
+            </div>
+
+            {/* Custom Date Input */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <div className="flex items-center gap-2 flex-1">
+                <Calendar className="w-4 h-4 text-on-surface-variant shrink-0" />
+                <input
+                  type="date"
+                  aria-label="Custom rule expiration date"
+                  value={dateInputValue}
+                  onChange={(e) => handleCustomDateChange(e.target.value)}
+                  className="h-9 rounded-lg bg-surface-container-lowest border border-outline-variant/60 px-3 text-sm text-on-surface focus:outline-none focus:border-primary/60 cursor-pointer w-full sm:w-auto"
+                />
+              </div>
+              <div className="text-xs text-on-surface-variant">
+                {validUntil ? (
+                  isExpired ? (
+                    <span className="text-error font-medium">Selected date is in the past (expired)</span>
+                  ) : (
+                    <span>
+                      Active until <strong className="text-on-surface">{formatRuleValidUntil(validUntil)}</strong>{' '}
+                      ({daysRemaining} {daysRemaining === 1 ? 'day' : 'days'} remaining)
+                    </span>
+                  )
+                ) : (
+                  <span className="text-primary font-medium">Standing perpetual rule (no expiration)</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Error or Success feedback */}
+        {errorMessage && (
+          <div className="text-xs text-error font-medium bg-error-container/40 p-2.5 rounded-lg border border-error/30">
+            {errorMessage}
+          </div>
+        )}
+
+        {saveSuccess && (
+          <div className="text-xs text-primary font-medium bg-primary-container/40 p-2.5 rounded-lg border border-primary/30 flex items-center gap-2">
+            <Check className="w-4 h-4 text-primary" />
+            <span>Category guardrail saved successfully!</span>
+          </div>
+        )}
+
+        {/* Actions Row */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-outline-variant/30">
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={handleSave}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-primary hover:bg-primary-fixed text-on-primary text-xs font-semibold transition-colors disabled:opacity-50 cursor-pointer w-full sm:w-auto shadow-sm"
+            >
+              {isSaving ? (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Saving Rule...</span>
+                </>
+              ) : saveSuccess ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Saved!</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Save Rule Configuration</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleReset}
+              disabled={isSaving}
+              className="px-3 py-2 rounded-lg bg-surface-container border border-outline-variant/60 hover:bg-surface-container-high text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors cursor-pointer"
+            >
+              Reset
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-xs text-on-surface-variant hover:text-primary transition-colors cursor-pointer"
+          >
+            Collapse rule details
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps> = ({
   customer,
   policy,
@@ -100,6 +590,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
   onToggleCategory,
   onOpenZeroTrustModal,
   onNavigate,
+  onUpdateCategoryRule,
 }) => {
   const [catFilter, setCatFilter] = useState('');
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
@@ -147,7 +638,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
           </h1>
           <p className="text-sm text-on-surface-variant">
             Choose which kitchen supplies can be ordered automatically up to €
-            {policy.max_auto_approve_eur.toLocaleString()}. Everything else waits for your approval.
+            {policy.max_auto_approve_eur.toLocaleString()}. Configure storage volume caps, time periods, and active rule windows so your team never gets stuck waiting for manual sign-offs.
           </p>
         </div>
 
@@ -245,10 +736,57 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
               const Icon = meta.icon;
               const isExpanded = expandedCategory === cat;
 
+              // Extract category usage & rule configuration
+              const ruleUsage: CategoryRuleUsageDTO | undefined =
+                guardrails?.category_usage?.[cat] ||
+                (policy.category_rules?.[cat]
+                  ? {
+                      ...policy.category_rules[cat],
+                      current_period_consumed_litres: 0,
+                      is_expired: policy.category_rules[cat].rule_valid_until
+                        ? Date.now() > new Date(policy.category_rules[cat].rule_valid_until!).getTime()
+                        : false,
+                      days_remaining: policy.category_rules[cat].rule_valid_until
+                        ? Math.max(
+                            0,
+                            Math.ceil(
+                              (new Date(policy.category_rules[cat].rule_valid_until!).getTime() - Date.now()) /
+                                86400000
+                            )
+                          )
+                        : null,
+                    }
+                  : undefined);
+
+              const timeWindow: CategoryTimeWindow = ruleUsage?.time_window ?? 'weekly';
+              const maxStorageLitres: number =
+                ruleUsage?.max_storage_litres ??
+                (cat === 'dairy' ? 1000 : policy.max_auto_approve_litres);
+              const consumedLitres: number = ruleUsage?.current_period_consumed_litres ?? 0;
+              const ruleValidUntil: string | null = ruleUsage?.rule_valid_until ?? null;
+              const isExpired: boolean =
+                ruleUsage?.is_expired ??
+                (ruleValidUntil ? Date.now() > new Date(ruleValidUntil).getTime() : false);
+              const daysRemaining: number | null =
+                ruleUsage?.days_remaining ??
+                (ruleValidUntil
+                  ? Math.max(0, Math.ceil((new Date(ruleValidUntil).getTime() - Date.now()) / 86400000))
+                  : null);
+
+              const windowLabel = getWindowLabel(timeWindow);
+              const windowUnit = getWindowUnit(timeWindow);
+              const capDisplay = `${windowLabel} cap: ${maxStorageLitres.toLocaleString()}L${windowUnit}`;
+
+              const usagePct =
+                maxStorageLitres > 0
+                  ? Math.min(100, Math.round((consumedLitres / maxStorageLitres) * 100))
+                  : 0;
+
               return (
-                <div key={cat} className="p-4 sm:p-5 flex flex-col gap-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3.5 min-w-0">
+                <div key={cat} className="p-4 sm:p-5 flex flex-col gap-3.5 transition-colors">
+                  {/* Category Card Header Row */}
+                  <div className="flex items-start sm:items-center justify-between gap-4">
+                    <div className="flex items-start sm:items-center gap-3.5 min-w-0">
                       <div
                         className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
                           isAllowed
@@ -259,20 +797,22 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                         <Icon className="w-5 h-5" />
                       </div>
                       <div className="min-w-0">
-                        <div className="text-sm font-semibold text-on-surface">
-                          {meta.title}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-on-surface">
+                            {meta.title}
+                          </span>
                         </div>
                         <p className="text-xs text-on-surface-variant truncate">
                           {meta.subtitle}
                         </p>
-                        <p className="text-[11px] text-on-surface-variant/75 truncate mt-1">
+                        <p className="text-[11px] text-on-surface-variant/75 truncate mt-0.5">
                           {meta.examples}
                         </p>
                       </div>
                     </div>
 
                     <div className="flex flex-col items-end gap-2 shrink-0">
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-3 sm:gap-4">
                         <div className="hidden sm:block text-right">
                           <div
                             className={`text-xs font-medium ${
@@ -308,31 +848,83 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                         onClick={() => setExpandedCategory(isExpanded ? null : cat)}
                         className="inline-flex items-center gap-1 text-xs text-on-surface-variant hover:text-primary transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >
-                        <span>{isExpanded ? 'Hide rule' : 'Rule details'}</span>
+                        <span>{isExpanded ? 'Hide rule editor' : 'Configure rule'}</span>
                         {isExpanded ? (
-                          <ChevronDown className="w-3.5 h-3.5" />
+                          <ChevronUp className="w-3.5 h-3.5" />
                         ) : (
-                          <ChevronRight className="w-3.5 h-3.5" />
+                          <ChevronDown className="w-3.5 h-3.5" />
                         )}
                       </button>
                     </div>
                   </div>
 
-                  {isExpanded && (
-                    <div className="pl-14 pt-2 border-t border-outline-variant/30 flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant">
-                      <span>
-                        {isAllowed
-                          ? `Orders in ${meta.title} under €${policy.max_auto_approve_eur} and ${policy.max_auto_approve_litres}L confirm automatically.`
-                          : `Any order in ${meta.title} is held until a manager approves it.`}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => onNavigate('safety-and-budget-limits')}
-                        className="text-primary hover:underline whitespace-nowrap cursor-pointer"
-                      >
-                        Change €{policy.max_auto_approve_eur} limit →
-                      </button>
+                  {/* Surface Category Time Configuration & Rule Active Limit Strip */}
+                  <div className="pl-0 sm:pl-[54px] flex flex-col gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                      {/* Left: Category Time Configuration & Volume Usage Meter */}
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 font-semibold text-on-surface shrink-0">
+                          <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
+                          <span>{capDisplay}</span>
+                        </div>
+
+                        {/* Progress bar / usage meter */}
+                        <div className="flex items-center gap-2 flex-1 max-w-xs">
+                          <div className="w-24 sm:w-28 bg-surface-container-highest h-2 rounded-full overflow-hidden shrink-0">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                consumedLitres >= maxStorageLitres
+                                  ? 'bg-error'
+                                  : usagePct >= 80
+                                  ? 'bg-amber-400'
+                                  : 'bg-primary'
+                              }`}
+                              style={{
+                                width: `${Math.min(100, Math.max(consumedLitres > 0 ? 4 : 0, usagePct))}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-[11px] text-on-surface-variant tabular-nums truncate">
+                            {consumedLitres.toFixed(1)}L / {maxStorageLitres.toLocaleString()}L ({usagePct}%)
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Right: Rule Active / Expired Time Limit Badge */}
+                      <div className="shrink-0 flex items-center">
+                        {isExpired ? (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-error-container text-error border border-error/30">
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            <span>Rule expired - requires human approval</span>
+                          </div>
+                        ) : ruleValidUntil ? (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-primary-container/40 text-primary border border-primary/30">
+                            <CalendarCheck className="w-3 h-3 shrink-0" />
+                            <span>
+                              Rule active until {formatRuleValidUntil(ruleValidUntil)} ({daysRemaining}{' '}
+                              {daysRemaining === 1 ? 'day' : 'days'} remaining)
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-surface-container-high text-on-surface-variant border border-outline-variant/30">
+                            <ShieldCheck className="w-3 h-3 shrink-0 text-primary" />
+                            <span>Perpetual rule (no expiration)</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
+                  </div>
+
+                  {/* Expanded Category Rule View & Form */}
+                  {isExpanded && (
+                    <CategoryRuleEditor
+                      category={cat}
+                      categoryTitle={meta.title}
+                      ruleUsage={ruleUsage}
+                      defaultMaxLitres={cat === 'dairy' ? 1000 : policy.max_auto_approve_litres}
+                      onSave={onUpdateCategoryRule}
+                      onClose={() => setExpandedCategory(null)}
+                    />
                   )}
                 </div>
               );

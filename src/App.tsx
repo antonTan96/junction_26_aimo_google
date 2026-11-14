@@ -3,6 +3,7 @@ import { DEFAULT_TENANT_ID } from './lib/aimogate';
 import type {
   AgentRunResponse,
   AuditLogEntry,
+  CategoryRule,
   CustomerRosterItem,
   GuardrailWhitelistDTO,
   NavSectionId,
@@ -218,6 +219,30 @@ export default function App() {
     }
   };
 
+  const handleUpdateCategoryRule = async (
+    category: string,
+    patch: Partial<Omit<CategoryRule, 'category'>>
+  ) => {
+    const res = await authFetch(
+      `${API_BASE}/policies/categories/${category}?tenant_id=${selectedTenant}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      }
+    );
+    if (res.ok) {
+      await refreshAllData(selectedTenant);
+      showToast(
+        `Guardrail rule updated for ${category.toUpperCase()}`,
+        'success'
+      );
+    } else {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      showToast(`Could not update category rule (${res.status}): ${err.detail}`, 'error');
+      throw new Error(err.detail || 'Failed to update category rule');
+    }
+  };
+
   const handleRunAgent = async (prompt: string, mode: string) => {
     setIsRunningAgent(true);
     setAgentResponse(null);
@@ -406,6 +431,7 @@ export default function App() {
             auditLogs={auditLogs}
             globalSearch={searchQuery}
             onToggleCategory={handleToggleCategory}
+            onUpdateCategoryRule={handleUpdateCategoryRule}
             onPublishPolicies={() =>
               showToast(
                 `Published strict policy snapshot for ${currentCustomer.tenant_name}.`,
