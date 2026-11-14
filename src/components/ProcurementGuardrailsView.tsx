@@ -1004,7 +1004,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
 
             {recentOrders.length === 0 ? (
               <p className="text-xs text-on-surface-variant">
-                No orders yet for this location. Place an order to test your settings.
+                No orders yet for your restaurant. Place an order to test your settings.
               </p>
             ) : (
               <div className="divide-y divide-outline-variant/40">

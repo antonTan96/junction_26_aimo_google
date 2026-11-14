@@ -84,7 +84,7 @@ export const SafetyBudgetView: React.FC<SafetyBudgetViewProps> = ({
           </div>
           <p className="text-xs text-on-surface-variant">
             {isHalted
-              ? 'All new orders across your restaurant locations are waiting for your manual approval.'
+              ? 'All new orders for your restaurant are waiting for your manual approval.'
               : `Allowed items up to €${eurCap.toLocaleString()} and ${litresCap.toLocaleString()} L confirm automatically.`}
           </p>
         </div>
@@ -366,7 +366,7 @@ export const SafetyBudgetView: React.FC<SafetyBudgetViewProps> = ({
               {orders.length === 0 && (
                 <tr>
                   <td colSpan={4} className="py-8 text-center text-sm text-on-surface-variant">
-                    No order limit checks yet for this location.
+                    No order limit checks yet for your restaurant.
                   </td>
                 </tr>
               )}

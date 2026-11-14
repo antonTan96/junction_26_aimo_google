@@ -40,7 +40,6 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
   onOpenZeroTrustModal,
 }) => {
   const [timeWindow, setTimeWindow] = useState<'24h' | '7d' | '30d'>('24h');
-  const [tenantFilter, setTenantFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [localSearch, setLocalSearch] = useState('');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(
@@ -52,15 +51,14 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
 
   const filteredOrders = useMemo(() => {
     return allOrders.filter((ord) => {
-      if (tenantFilter !== 'ALL' && ord.tenant_id !== tenantFilter) return false;
       if (statusFilter !== 'ALL' && ord.status !== statusFilter) return false;
       if (query) {
-        const hay = `${ord.order_id} ${ord.sku || ''} ${ord.product_name || ''} ${ord.tenant_name || ''} ${ord.po_reference}`.toLowerCase();
+        const hay = `${ord.order_id} ${ord.sku || ''} ${ord.product_name || ''} ${ord.po_reference}`.toLowerCase();
         if (!hay.includes(query)) return false;
       }
       return true;
     });
-  }, [allOrders, tenantFilter, statusFilter, query]);
+  }, [allOrders, statusFilter, query]);
 
   const activeOrder =
     filteredOrders.find((o) => o.order_id === selectedOrderId) ||
@@ -147,20 +145,6 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
           </div>
 
           <select
-            aria-label="Filter by location"
-            value={tenantFilter}
-            onChange={(e) => setTenantFilter(e.target.value)}
-            className="bg-surface-container-lowest border border-outline-variant/50 text-on-surface text-xs rounded-xl px-3 py-2 focus:outline-none cursor-pointer"
-          >
-            <option value="ALL">All Locations</option>
-            {customers.map((c) => (
-              <option key={c.tenant_id} value={c.tenant_id}>
-                {c.tenant_name}
-              </option>
-            ))}
-          </select>
-
-          <select
             aria-label="Filter by order status"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
@@ -177,10 +161,10 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
           <Filter className="w-4 h-4 absolute left-3 top-2.5 text-on-surface-variant pointer-events-none" />
           <input
             type="text"
-            aria-label="Filter orders by item, order number, or location"
+            aria-label="Filter orders by item or order number"
             value={localSearch}
             onChange={(e) => setLocalSearch(e.target.value)}
-            placeholder="Search item, order #, or location..."
+            placeholder="Search item or order #..."
             className="w-full h-9 bg-surface-container-lowest border border-outline-variant/50 text-xs text-on-surface placeholder:text-on-surface-variant/60 rounded-xl pl-9 pr-3 focus:outline-none focus:border-primary/50"
           />
         </div>
@@ -228,7 +212,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
                           {ord.product_name || ord.sku}
                         </div>
                         <div className="text-xs text-on-surface-variant truncate">
-                          {ord.tenant_name || ord.tenant_id} · {ord.pack_quantity} boxes
+                          {ord.pack_quantity ? `${ord.pack_quantity} boxes` : `${ord.total_litres || 0}L`}
                         </div>
                       </td>
                       <td className="py-3.5 px-2 text-right font-semibold text-on-surface whitespace-nowrap">
@@ -274,7 +258,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
               <div className="flex items-start justify-between gap-3">
                 <div className="space-y-1 min-w-0">
                   <div className="text-xs text-on-surface-variant">
-                    {activeOrder.tenant_name || activeOrder.tenant_id} · {activeOrder.order_id}
+                    Order #{activeOrder.order_id}
                   </div>
                   <h2 className="text-lg font-semibold text-on-surface font-headline">
                     {activeOrder.product_name || activeOrder.sku}

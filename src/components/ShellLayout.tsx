@@ -13,6 +13,7 @@ import {
   X,
   AlertTriangle,
   CheckCircle2,
+  Store,
 } from 'lucide-react';
 import type {
   CustomerRosterItem,
@@ -27,7 +28,7 @@ interface ShellLayoutProps {
   searchQuery: string;
   onSearchChange: (q: string) => void;
   selectedTenant: string;
-  onTenantChange: (tenantId: string) => void;
+  onTenantChange?: (tenantId: string) => void;
   customers: CustomerRosterItem[];
   pendingOrders: OrderDTO[];
   overview: NetworkOverview | null;
@@ -107,26 +108,21 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
           </button>
         </div>
 
-        {/* Location Selector */}
+        {/* Restaurant Display */}
         <div className="px-5 mb-6">
-          <label
-            htmlFor="sidebar-tenant-select"
-            className="block px-1 mb-1.5 text-xs font-medium text-on-surface-variant"
-          >
-            Restaurant / Location
-          </label>
-          <select
-            id="sidebar-tenant-select"
-            value={selectedTenant}
-            onChange={(e) => onTenantChange(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-xl bg-surface-container-lowest border border-outline-variant/60 text-sm text-on-surface font-medium focus:outline-none focus:border-primary/50 cursor-pointer"
-          >
-            {customers.map((c) => (
-              <option key={c.tenant_id} value={c.tenant_id}>
-                {c.tenant_name}
-              </option>
-            ))}
-          </select>
+          <div className="p-3 rounded-xl bg-surface-container border border-outline-variant/50 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+              <Store className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <span className="block text-[11px] text-on-surface-variant font-medium">
+                Restaurant
+              </span>
+              <span className="block text-sm font-semibold text-on-surface truncate">
+                {currentCustomer?.tenant_name || 'Nordic Crown Hotels (Helsinki)'}
+              </span>
+            </div>
+          </div>
         </div>
 
         <nav className="flex flex-col gap-1.5 px-3" aria-label="Main navigation">

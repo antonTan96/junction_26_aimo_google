@@ -35,7 +35,7 @@ export const KillswitchModal: React.FC<KillswitchModalProps> = ({
                 {isHalted ? 'Resume Automatic Ordering' : 'Pause All Automatic Orders'}
               </h2>
               <p className="text-xs text-on-surface-variant">
-                {isHalted ? 'Re-enable kitchen auto-orders' : 'Safety hold across all locations'}
+                {isHalted ? 'Re-enable kitchen auto-orders' : 'Safety hold for your restaurant'}
               </p>
             </div>
           </div>
@@ -52,7 +52,7 @@ export const KillswitchModal: React.FC<KillswitchModalProps> = ({
         <p className="text-sm text-on-surface-variant leading-relaxed">
           {isHalted
             ? 'Resuming will let orders within your spending limits confirm automatically again.'
-            : 'Pausing holds every new order across all restaurant locations so nothing is confirmed without your direct approval.'}
+            : 'Pausing holds every new order for your restaurant so nothing is confirmed without your direct approval.'}
         </p>
 
         <div className="flex items-center justify-end gap-3 pt-2">

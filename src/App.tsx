@@ -137,7 +137,11 @@ export default function App() {
         ]);
 
         if (tRes.ok) setTokens(await tRes.json());
-        if (cRes.ok) setCustomers(await cRes.json());
+        if (cRes.ok) {
+          const allCustomers: CustomerRosterItem[] = await cRes.json();
+          const myCustomer = allCustomers.filter((c) => c.tenant_id === DEFAULT_TENANT_ID);
+          setCustomers(myCustomer.length > 0 ? myCustomer : allCustomers.slice(0, 1));
+        }
         if (oRes.ok) setOverview(await oRes.json());
         if (pRes.ok) setPolicy(await pRes.json());
         if (gRes.ok) setGuardrails(await gRes.json());
@@ -159,13 +163,6 @@ export default function App() {
   useEffect(() => {
     refreshAllData(selectedTenant);
   }, [selectedTenant, refreshAllData]);
-
-  const handleTenantChange = (tenantId: string) => {
-    setSelectedTenant(tenantId);
-    setAgentResponse(null);
-    const cust = customers.find((c) => c.tenant_id === tenantId);
-    showToast(`Switched location to ${cust?.tenant_name || tenantId}`, 'info');
-  };
 
   const handleResetDemo = async () => {
     const res = await fetch(`${API_BASE}/demo/reset`, { method: 'POST' });
@@ -372,7 +369,7 @@ export default function App() {
       await refreshAllData(selectedTenant);
       showToast(
         nextHalted
-          ? 'Automatic ordering paused across all locations.'
+          ? 'Automatic ordering paused for your restaurant.'
           : 'Automatic ordering resumed.',
         nextHalted ? 'error' : 'success'
       );
@@ -391,7 +388,6 @@ export default function App() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         selectedTenant={selectedTenant}
-        onTenantChange={handleTenantChange}
         customers={customers}
         pendingOrders={pendingOrders}
         overview={overview}
@@ -447,7 +443,6 @@ export default function App() {
           <PromptSchedulerView
             customers={customers}
             selectedTenant={selectedTenant}
-            onTenantChange={handleTenantChange}
             policy={policy}
             pendingOrders={pendingOrders}
             recurrentGrants={recurrentGrants}

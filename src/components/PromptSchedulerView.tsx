@@ -24,7 +24,7 @@ import type {
 interface PromptSchedulerViewProps {
   customers: CustomerRosterItem[];
   selectedTenant: string;
-  onTenantChange: (tenantId: string) => void;
+  onTenantChange?: (tenantId: string) => void;
   policy: TenantPolicy;
   pendingOrders: OrderDTO[];
   recurrentGrants: RecurrentApprovalGrant[];
@@ -110,6 +110,8 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
   const [showWindowOptions, setShowWindowOptions] = useState(false);
   const [showTraceDetails, setShowTraceDetails] = useState(false);
 
+  const currentCustomer = customers.find((c) => c.tenant_id === selectedTenant) || customers[0];
+
   const handleSaveRecurring = () => {
     onDeploySchedule({
       name: workflowName.trim() || 'Weekly Kitchen Restock',
@@ -160,26 +162,17 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
               </div>
             </div>
 
-            {/* Location Picker */}
+            {/* Delivery Destination */}
             <div className="space-y-1.5">
-              <label
-                htmlFor="order-location-select"
-                className="text-xs font-medium text-on-surface-variant block"
-              >
-                Deliver to location
-              </label>
-              <select
-                id="order-location-select"
-                value={selectedTenant}
-                onChange={(e) => onTenantChange(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-outline-variant/50 text-sm text-on-surface focus:outline-none focus:border-primary/50 cursor-pointer"
-              >
-                {customers.map((c) => (
-                  <option key={c.tenant_id} value={c.tenant_id}>
-                    {c.tenant_name} (Auto-limit €{c.max_auto_approve_eur})
-                  </option>
-                ))}
-              </select>
+              <span className="text-xs font-medium text-on-surface-variant block">
+                Deliver to
+              </span>
+              <div className="px-3.5 py-2.5 rounded-xl bg-surface-container-lowest border border-outline-variant/50 text-sm text-on-surface font-medium flex items-center justify-between">
+                <span className="truncate">{currentCustomer?.tenant_name || 'Nordic Crown Hotels (Helsinki)'}</span>
+                <span className="text-xs text-on-surface-variant shrink-0 ml-2">
+                  Auto-limit €{policy.max_auto_approve_eur.toLocaleString()}
+                </span>
+              </div>
             </div>
 
             {/* Quick Order Examples */}
