@@ -381,8 +381,8 @@ export async function createApp() {
         customer: req.body?.customer || '123',
       });
 
-      // If client disconnected or cancelled the request before completion, do not commit order or deplete stock
-      if (req.destroyed || req.socket?.destroyed || res.writableEnded) {
+      // If client disconnected or aborted before completion, do not commit order or deplete stock
+      if (req.socket?.destroyed || !req.socket?.writable || (res as any).closed) {
         console.warn(`[server] Client disconnected before order execution completed. Discarding order for prompt: "${req.body?.prompt}"`);
         return;
       }
@@ -426,8 +426,8 @@ export async function createApp() {
         customer: req.body?.customer || '123',
       });
 
-      // If client disconnected or cancelled the request before completion, do not commit order or deplete stock
-      if (req.destroyed || req.socket?.destroyed || res.writableEnded) {
+      // If client disconnected or aborted before completion, do not commit order or deplete stock
+      if (req.socket?.destroyed || !req.socket?.writable || (res as any).closed) {
         console.warn(`[server] Client disconnected before order execution completed. Discarding order for prompt: "${req.body?.prompt}"`);
         return;
       }
