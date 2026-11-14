@@ -29,6 +29,92 @@ It enables kitchen teams to request supplies in plain English, while an autonomo
 
 ---
 
+## System Architecture
+
+```mermaid
+flowchart TD
+    subgraph Clients["Clients & Users"]
+        Chef["Kitchen Chef & Buyer Agent<br/>(Natural Language Requisitions)"]
+        Manager["Restaurant Manager<br/>(HITL Guardrails & Approvals)"]
+        MCPClient["AI Agent Frameworks<br/>(Model Context Protocol)"]
+    end
+
+    subgraph Firebase["Firebase Hosting (CDN Edge)"]
+        SPA["Vite / React 19 Frontend SPA<br/>(Tailwind CSS + Lucide Icons)"]
+        Rewrite["URL Proxy & Rewrites<br/>/api/** to Cloud Run"]
+    end
+
+    subgraph CloudRun["Google Cloud Run (Backend API: aimogate-api)"]
+        API["Express.js Gateway & MCP Server"]
+        
+        subgraph RAGCore["RAG Retrieval & Ranking Engine"]
+            IntentParser["Intent & Unit Extractor<br/>(Finnish & English Morphology)"]
+            CatalogIndex["Valio Aimo Catalog Engine<br/>(17,546 Indexed SKUs)"]
+            CandidateScorer["Noun-Weighted Candidate Scorer<br/>(IDF Bonuses & Category Hygiene)"]
+        end
+
+        subgraph Firewall["Zero-Trust Policy & Guardrail Firewall"]
+            RBAC["Role-Based Access Control<br/>(Agent 403 / Human Sign-off)"]
+            Caps["Spend & Volume Storage Caps<br/>(Rolling Weekly/Daily Windows)"]
+            Whitelist["Category Whitelists<br/>(Strict Category Enforcement)"]
+            Killswitch["Emergency Circuit Breaker<br/>(Fleet-Wide Killswitch)"]
+        end
+
+        subgraph Storage["State & Audit Persistence"]
+            AuditLog["SHA-256 Chained Audit Trail"]
+            Firestore["Firestore / In-Memory Store<br/>(Locks, Orders, Policies)"]
+            MariaDB["MariaDB 11.4 Full-Text Index<br/>(Zero-Downtime Failover)"]
+        end
+    end
+
+    subgraph External["External Services & Upstream APIs"]
+        subgraph DataCrunch["DataCrunch B300 Infrastructure"]
+            Nemotron["NVIDIA Nemotron 3.5 Super VL 120B<br/>(Chain-of-Thought Reasoning & Optimization)"]
+        end
+
+        subgraph ValioAPI["Valio Aimo Upstream API"]
+            ValioCatalog["Catalog Download<br/>/api/products/download"]
+            ValioPrice["Live Pricing<br/>/api/price"]
+            ValioStock["Warehouse Inventory<br/>/api/availability"]
+        end
+    end
+
+    Chef --> SPA
+    Manager --> SPA
+    MCPClient --> API
+    SPA --> Rewrite
+    Rewrite --> API
+
+    API --> IntentParser
+    IntentParser --> CatalogIndex
+    CatalogIndex --> CandidateScorer
+    CatalogIndex -.-> MariaDB
+    CandidateScorer --> ValioPrice
+    CandidateScorer --> ValioStock
+    
+    CandidateScorer --> Nemotron
+    Nemotron --> Firewall
+    
+    Firewall --> RBAC
+    Firewall --> Caps
+    Firewall --> Whitelist
+    Firewall --> Killswitch
+    
+    Firewall --> Firestore
+    Firewall --> AuditLog
+    
+    ValioCatalog -.-> CatalogIndex
+```
+
+### Architectural Pipeline Flow:
+1. **Natural Language Procurement**: Chefs and buyers submit unstructured procurement requests in English or Finnish (e.g. `"50 litraa luomu täysmaitoa"` or `"10kg butter for the bakery"`).
+2. **Intent Parsing & Suffix Normalization**: Extracts quantities, unit types, and removes contextual department phrases to prevent keyword hijacking while normalizing Finnish morphological inflections (`täysmaitoa → täysmaito`).
+3. **Semantic Catalog Retrieval & Live Upstream Augmentation**: Queries the 17,546 Valio Aimo catalog with noun-weighted term matching, then queries the official Valio Aimo API in real time for live pricing (`/api/price`) and stock availability (`/api/availability`).
+4. **NVIDIA Nemotron 3.5 Super VL Reasoning**: Evaluates candidate trade-offs on DataCrunch B300 hardware, calculating exact pack requirements, unit economics, dietary compliance, and transparent chain-of-thought traces (with deterministic fallback).
+5. **Zero-Trust Policy Firewall**: Validates orders against tenant spending limits, rolling weekly storage volume caps (e.g. 1,000L/week dairy), rule expiration windows (`rule_valid_until`), category whitelists, and emergency circuit breakers before reserving or approving inventory.
+
+---
+
 ## Deployment: Option A (Firebase Hosting + Google Cloud Run)
 
 This deployment architecture hosts the frontend on **Firebase Hosting** and the backend API container on **Google Cloud Run** in the same GCP/Firebase project (`junction26hel-7631`).
