@@ -47,6 +47,21 @@ interface SerializedSnapshot {
   audit_logs: AuditLogEntry[];
 }
 
+function cleanUndefined<T>(obj: T): T {
+  if (obj === undefined) return null as unknown as T;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) {
+    return obj.map(cleanUndefined) as unknown as T;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) {
+      result[k] = cleanUndefined(v);
+    }
+  }
+  return result as T;
+}
+
 function isFirestoreAuthOrUnavailableError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (
@@ -54,6 +69,11 @@ function isFirestoreAuthOrUnavailableError(err: unknown): boolean {
     msg.includes('Could not load the default credentials') ||
     msg.includes('UNAUTHENTICATED') ||
     msg.includes('UNAVAILABLE') ||
+    msg.includes('NOT_FOUND') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('DEADLINE_EXCEEDED') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('ENOTFOUND') ||
     msg.includes('7 ')
   );
 }
@@ -131,41 +151,61 @@ export class PersistentAimoGateStore {
   }
 
   private async writeFullToFirestore(snap: SerializedSnapshot): Promise<void> {
-    const batch = adminDb.batch();
+    const batches: Array<ReturnType<typeof adminDb.batch>> = [];
+    let currentBatch = adminDb.batch();
+    let opCount = 0;
+
+    const queueSet = (ref: FirebaseFirestore.DocumentReference, data: unknown) => {
+      currentBatch.set(ref, cleanUndefined(data) as FirebaseFirestore.WithFieldValue<FirebaseFirestore.DocumentData>);
+      opCount++;
+      if (opCount >= 400) {
+        batches.push(currentBatch);
+        currentBatch = adminDb.batch();
+        opCount = 0;
+      }
+    };
+
     for (const p of snap.policies) {
-      batch.set(adminDb.collection('policies').doc(p.tenant_id), p);
+      queueSet(adminDb.collection('policies').doc(p.tenant_id), p);
     }
     for (const p of snap.products) {
-      batch.set(adminDb.collection('products').doc(p.sku), p);
+      queueSet(adminDb.collection('products').doc(p.sku), p);
     }
     for (const cp of snap.contract_prices) {
-      batch.set(adminDb.collection('contract_prices').doc(cp.id), cp);
+      queueSet(adminDb.collection('contract_prices').doc(cp.id), cp);
     }
     for (const s of snap.warehouse_stock) {
-      batch.set(adminDb.collection('warehouse_stock').doc(s.sku), s);
+      queueSet(adminDb.collection('warehouse_stock').doc(s.sku), s);
     }
     for (const q of snap.quote_locks) {
-      batch.set(adminDb.collection('quote_locks').doc(q.quote_id), q);
+      queueSet(adminDb.collection('quote_locks').doc(q.quote_id), q);
     }
     for (const o of snap.orders) {
-      batch.set(adminDb.collection('orders').doc(o.order_id), o);
+      queueSet(adminDb.collection('orders').doc(o.order_id), o);
     }
     for (const g of snap.recurrent_grants) {
-      batch.set(adminDb.collection('recurrent_grants').doc(g.grant_id), g);
+      queueSet(adminDb.collection('recurrent_grants').doc(g.grant_id), g);
     }
     for (const sp of snap.scheduled_prompts) {
-      batch.set(adminDb.collection('scheduled_prompts').doc(sp.schedule_id), sp);
+      queueSet(adminDb.collection('scheduled_prompts').doc(sp.schedule_id), sp);
     }
     for (const al of snap.audit_logs.slice(0, 100)) {
-      batch.set(adminDb.collection('audit_logs').doc(String(al.id).padStart(8, '0')), al);
+      queueSet(adminDb.collection('audit_logs').doc(String(al.id).padStart(8, '0')), al);
     }
-    batch.set(adminDb.collection('system_config').doc('gateway'), {
+    queueSet(adminDb.collection('system_config').doc('gateway'), {
       initialized: true,
       killswitch_halted: snap.killswitch_halted,
       audit_seq: snap.audit_seq,
       id_counter: snap.id_counter,
     });
-    await batch.commit();
+
+    if (opCount > 0) {
+      batches.push(currentBatch);
+    }
+
+    for (const b of batches) {
+      await b.commit();
+    }
   }
 
   private async readFullFromFirestore(): Promise<SerializedSnapshot | null> {
@@ -291,15 +331,17 @@ export class PersistentAimoGateStore {
         await this.writeFullToFirestore(snap);
         return;
       } catch (err) {
-        if (!isFirestoreAuthOrUnavailableError(err)) {
-          console.error('Firestore write failed:', err);
-          throw new GatewayError(500, 'Persistent storage write failed.');
-        }
+        console.warn('Firestore write failed, falling back to local persistent store:', err);
         this.useLocalFallback = true;
         this.persistenceBackend = 'local-fallback';
       }
     }
-    await this.writeLocalFallback(snap);
+    try {
+      await this.writeLocalFallback(snap);
+    } catch (localErr) {
+      console.error('Persistent local fallback store write failed:', localErr);
+      throw new GatewayError(500, 'Persistent storage write failed.');
+    }
   }
 
   private async persistReset(): Promise<void> {
@@ -315,9 +357,7 @@ export class PersistentAimoGateStore {
           }
         }
       } catch (err) {
-        if (!isFirestoreAuthOrUnavailableError(err)) {
-          throw new GatewayError(500, 'Failed to reset persistent database.');
-        }
+        console.warn('Firestore reset notice, falling back to local store:', err);
         this.useLocalFallback = true;
         this.persistenceBackend = 'local-fallback';
       }

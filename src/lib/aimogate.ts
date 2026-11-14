@@ -1349,9 +1349,9 @@ export class AimoGateStore {
       pack_quantity: quote.pack_quantity,
       total_litres: quote.total_litres,
       verification_hash: computeShortHash(`${orderId}|${quote.quote_id}|${quote.locked_total_eur}|${req.po_reference}`),
-      traces: req.traces,
-      offer_comparisons: req.offer_comparisons,
-      items: req.items,
+      traces: req.traces ?? null,
+      offer_comparisons: req.offer_comparisons ?? null,
+      items: req.items ?? null,
       recipe_name: req.recipe_name ?? null,
       substitution_request: req.substitution_request ?? null,
     };
