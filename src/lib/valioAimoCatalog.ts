@@ -46,6 +46,7 @@ export class ValioAimoCatalogService {
     }
     const candidatePaths = [
       process.env.VALIO_CATALOG_PATH,
+      path.resolve(process.cwd(), 'data/valio_catalog_17546.json'),
       path.resolve(process.cwd(), '../junction26_aimo/valio_aimo_junction26_product_data.json'),
       path.resolve(process.cwd(), 'valio_aimo_junction26_product_data.json'),
       '/home/anton/junction26/junction26_aimo/valio_aimo_junction26_product_data.json',
@@ -81,6 +82,16 @@ export class ValioAimoCatalogService {
 
       this.products = [];
       this.productMap.clear();
+
+      // Fast-path: if pre-processed CatalogProduct array
+      if (raw.length > 0 && raw[0].display_name && raw[0].search_corpus) {
+        this.products = raw;
+        for (const item of this.products) {
+          this.productMap.set(item.id, item);
+        }
+        this.isLoaded = true;
+        return;
+      }
 
       for (const p of raw) {
         if (p.deleted) continue;

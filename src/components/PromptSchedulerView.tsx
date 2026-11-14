@@ -145,7 +145,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
       try {
         const catParam = catalogCategory !== 'all' ? `&category=${catalogCategory}` : '';
         const qParam = catalogSearch ? `&q=${encodeURIComponent(catalogSearch)}` : '';
-        const res = await fetch(`/api/v1/catalog/search?limit=6${catParam}${qParam}`);
+        const res = await fetch(`/api/v1/catalog/search?limit=12${catParam}${qParam}`);
         if (res.ok && !cancelled) {
           const data = await res.json();
           setCatalogItems(data.products || []);
