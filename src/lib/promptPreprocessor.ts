@@ -5,6 +5,7 @@ import {
   type RecipeMetadata,
 } from '../types/aimogate.ts';
 import { extractShortTags } from './aimogate.ts';
+import { GeminiClient } from './geminiClient.ts';
 import { NemotronClient } from './nemotronClient.ts';
 
 export interface BaseRecipeIngredient {
@@ -832,12 +833,43 @@ export async function preprocessBuyerPrompt(
   }
 
   const tLower = prompt.toLowerCase();
-  // Optional Remote LLM Hook: If Nemotron is active and prompt asks for an uncataloged custom recipe
+  // 1. Optional Google Gemini 2.5 Inference for custom/uncataloged recipes
   if (
     process.env.DISABLE_REMOTE_LLM !== 'true' &&
     (tLower.includes('recipe') || tLower.includes('ingredients for') || tLower.includes('ainekset'))
   ) {
     try {
+      const gemini = GeminiClient.getInstance();
+      if (gemini.isAvailable()) {
+        const geminiRecipe = await gemini.deduceRecipe(prompt);
+        if (geminiRecipe && geminiRecipe.raw_ingredients && geminiRecipe.raw_ingredients.length > 0) {
+          return {
+            raw_prompt: prompt,
+            request_type: 'recipe',
+            recipe: {
+              name: geminiRecipe.recipe_name,
+              servings_or_yield: geminiRecipe.servings_or_yield,
+              yield_unit: geminiRecipe.yield_unit,
+              cuisine: 'Nordic / International Commercial Kitchen',
+            },
+            dietary_tags: geminiRecipe.dietary_tags || [],
+            deliver_by: syncResult.deliver_by,
+            items: geminiRecipe.raw_ingredients.map((ing) => ({
+              ingredient_name: ing.ingredient_name,
+              search_query: ing.search_query || ing.ingredient_name,
+              quantity: ing.quantity,
+              unit: ing.unit,
+              category_hint: ing.category_hint || 'general',
+              dietary_tags: ing.dietary_tags || [],
+              importance: (ing.importance === 'optional' ? 'optional' : 'essential') as 'essential' | 'optional' | 'substitute',
+              culinary_role: ing.culinary_role || 'Commercial ingredient',
+            })),
+            notes: `Recipe deduced via Google Gemini (${gemini.getModelName()}): ${geminiRecipe.preparation_notes || 'Scaled for commercial batch.'}`,
+          };
+        }
+      }
+
+      // 2. Fallback to Nemotron if Gemini is not configured
       const nemotron = NemotronClient.getInstance();
       const llmResult = await queryNemotronForRecipe(prompt, nemotron);
       if (llmResult && llmResult.items && llmResult.items.length > 0) {

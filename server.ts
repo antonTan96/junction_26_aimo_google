@@ -313,7 +313,7 @@ export async function createApp() {
         return;
       }
 
-      // Default to NVIDIA Nemotron-3.5-Super-VL RAG pipeline
+      // Default to Google Gemini 2.5 Flash / Pro RAG pipeline (with fallback to Nemotron & Deterministic)
       const tenantId = req.body?.tenant_id || DEFAULT_TENANT_ID;
       const policy = await store.getPolicy(tenantId);
       const orders = await store.getOrders(tenantId);
@@ -328,14 +328,15 @@ export async function createApp() {
       if (result.agentResponse.order && result.quoteLocked) {
         store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
         store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
+        const activeModel = result.agentResponse.mode_used || 'gemini-2.5-flash';
         store.engine.addAuditLog({
           tenant_id: tenantId,
           actor_type: 'agent',
-          actor_id: `nemotron_agent_${tenantId}`,
-          action: 'NEMOTRON_RAG_ORDER',
+          actor_id: `buyer_agent_${tenantId}`,
+          action: 'AUTONOMOUS_RAG_ORDER',
           payload_summary: {
             prompt: req.body?.prompt,
-            model: 'nemotron-3.5-super-vl',
+            model: activeModel,
             sku: result.selectedProduct?.product.id,
             name: result.selectedProduct?.product.display_name,
             total_eur: result.selectedProduct?.totalCostEur,
@@ -512,10 +513,10 @@ export async function createApp() {
         source_dataset: 'valio_aimo_junction26_product_data.json (17,546 SKUs)',
         rag_enabled: true,
         llm: {
-          model: 'nemotron-3.5-super-vl',
-          provider: 'DataCrunch B300 (vLLM)',
-          endpoint: 'https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1',
-          architecture: 'NVIDIA Nemotron-3.5-Super-VL 120B (A12B NVFP4)',
+          primary_model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+          provider: 'Google DeepMind (Gemini 2.5 Flash / Pro)',
+          secondary_provider: 'DataCrunch B300 (NVIDIA Nemotron 3.5 Super-VL)',
+          fallback: 'Deterministic Culinary Ontology & Wholesaler Unit-Economics Solver',
         },
         upstream_api: {
           base_url: 'https://junction26.valioaimo.fi',

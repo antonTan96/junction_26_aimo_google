@@ -1,4 +1,5 @@
 import { ValioAimoCatalogService, type CatalogProduct } from './valioAimoCatalog.ts';
+import { GeminiClient } from './geminiClient.ts';
 import { NemotronClient } from './nemotronClient.ts';
 import {
   parseBuyerPrompt,
@@ -418,14 +419,26 @@ export class ValioAimoRAGService {
       })),
     });
 
-    // Step 3: Synthesis & Selection using NVIDIA Nemotron 3.5 Super VL (DataCrunch B300)
-    const nemotron = NemotronClient.getInstance();
-    const nemotronDecision = await nemotron.reasonProcurement({
+    // Step 3: Synthesis & Selection using Google Gemini 2.5 (or fallback to Nemotron / Deterministic)
+    const gemini = GeminiClient.getInstance();
+    const geminiDecision = await gemini.reasonProcurement({
       prompt,
       candidates: candidateContexts,
       policy,
       requiredVolume: parsed.volume_litres,
     });
+
+    const nemotron = !geminiDecision ? NemotronClient.getInstance() : null;
+    const nemotronDecision = nemotron
+      ? await nemotron.reasonProcurement({
+          prompt,
+          candidates: candidateContexts,
+          policy,
+          requiredVolume: parsed.volume_litres,
+        })
+      : null;
+
+    const activeLlmDecision = geminiDecision || nemotronDecision;
 
     let selected: RAGProductContext;
     let selectedPacks = 1;
@@ -433,13 +446,13 @@ export class ValioAimoRAGService {
     let aiExplanation = '';
     let chainOfThought: string | undefined = undefined;
 
-    if (nemotronDecision) {
-      const match = candidateContexts.find((c) => c.product.id === nemotronDecision.selectedSku);
+    if (activeLlmDecision) {
+      const match = candidateContexts.find((c) => c.product.id === activeLlmDecision.selectedSku);
       selected = match || candidateContexts[0];
-      selectedPacks = nemotronDecision.packsToOrder || selected.packsRequired;
-      selectedCost = nemotronDecision.totalCostEur || Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
-      aiExplanation = nemotronDecision.reasoning;
-      chainOfThought = nemotronDecision.chainOfThought;
+      selectedPacks = activeLlmDecision.packsToOrder || selected.packsRequired;
+      selectedCost = activeLlmDecision.totalCostEur || Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
+      aiExplanation = activeLlmDecision.reasoning;
+      chainOfThought = activeLlmDecision.chainOfThought;
     } else {
       // Deterministic unit-economics fallback
       const availableCandidates = candidateContexts.filter((c) => c.isAvailable && c.availablePacks >= c.packsRequired);
@@ -552,18 +565,26 @@ export class ValioAimoRAGService {
       ];
     }
 
+    const activeModelName = geminiDecision
+      ? geminiDecision.model
+      : nemotronDecision
+      ? nemotronDecision.model
+      : 'deterministic-solver';
+
     traces.push({
       step_number: 3,
       title: substitutionRequest
         ? 'RAG Step 3: Inventory Shortage & Substitution Request Formulated'
+        : geminiDecision
+        ? `RAG Step 3: Google Gemini (${geminiDecision.model}) Autonomous Trade Reasoning`
         : nemotronDecision
         ? 'RAG Step 3: NVIDIA Nemotron-3.5-Super-VL Reasoning (DataCrunch B300)'
         : 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
       description: `${aiExplanation} Policy evaluation: ${policyEval.passes ? 'PASSED (Auto-Approve)' : `REQUIRES SIGN-OFF (${policyEval.violations.join('; ')})`}.`,
       action_type: 'reasoning',
-      latency_ms: nemotronDecision?.latencyMs || 12,
+      latency_ms: activeLlmDecision?.latencyMs || 12,
       tool_output: {
-        model: nemotronDecision?.model || 'deterministic-solver',
+        model: activeModelName,
         selected_sku: selected.product.id,
         total_eur: selectedCost,
         unit_price: selected.comparisonPriceEur,
@@ -601,7 +622,11 @@ export class ValioAimoRAGService {
 
     const agentResponse: AgentRunResponse = {
       success: true,
-      mode_used: nemotronDecision ? 'nemotron-3.5-super-vl' : 'rag-augmented',
+      mode_used: geminiDecision
+        ? geminiDecision.model
+        : nemotronDecision
+        ? 'nemotron-3.5-super-vl'
+        : 'rag-augmented',
       execution_time_ms: Date.now() - t0,
       traces,
       final_status: finalStatus,

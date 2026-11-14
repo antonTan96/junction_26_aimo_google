@@ -244,7 +244,13 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
               </div>
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-[11px] font-medium text-primary border border-primary/20">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>NVIDIA Nemotron 3.5 Super VL</span>
+                <span>
+                  {agentResponse?.mode_used?.includes('gemini')
+                    ? 'Google Gemini 2.5 Flash'
+                    : agentResponse?.mode_used?.includes('nemotron')
+                    ? 'NVIDIA Nemotron 3.5'
+                    : 'Google Gemini 2.5 Flash'}
+                </span>
               </div>
             </div>
 
