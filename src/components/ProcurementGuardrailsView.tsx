@@ -859,59 +859,59 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                   </div>
 
                   {/* Surface Category Time Configuration & Rule Active Limit Strip */}
-                  <div className="pl-0 sm:pl-[54px] flex flex-col gap-2">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                      {/* Left: Category Time Configuration & Volume Usage Meter */}
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 font-semibold text-on-surface shrink-0">
-                          <Clock className="w-3.5 h-3.5 text-primary shrink-0" />
-                          <span>{capDisplay}</span>
+                  <div className="pl-0 sm:pl-[54px] pt-1 flex flex-col gap-2.5">
+                    {/* Top sub-row: Weekly Cap + Rule Active Badge with wrapping and spacing */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-2 font-semibold text-on-surface">
+                        <div className="w-5 h-5 rounded-md bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                          <Clock className="w-3.5 h-3.5" />
                         </div>
-
-                        {/* Progress bar / usage meter */}
-                        <div className="flex items-center gap-2 flex-1 max-w-xs">
-                          <div className="w-24 sm:w-28 bg-surface-container-highest h-2 rounded-full overflow-hidden shrink-0">
-                            <div
-                              className={`h-full rounded-full transition-all duration-300 ${
-                                consumedLitres >= maxStorageLitres
-                                  ? 'bg-error'
-                                  : usagePct >= 80
-                                  ? 'bg-amber-400'
-                                  : 'bg-primary'
-                              }`}
-                              style={{
-                                width: `${Math.min(100, Math.max(consumedLitres > 0 ? 4 : 0, usagePct))}%`,
-                              }}
-                            />
-                          </div>
-                          <span className="text-[11px] text-on-surface-variant tabular-nums truncate">
-                            {consumedLitres.toFixed(1)}L / {maxStorageLitres.toLocaleString()}L ({usagePct}%)
-                          </span>
-                        </div>
+                        <span>{capDisplay}</span>
                       </div>
 
-                      {/* Right: Rule Active / Expired Time Limit Badge */}
-                      <div className="shrink-0 flex items-center">
+                      {/* Rule Active / Expired Time Limit Badge */}
+                      <div className="flex items-center">
                         {isExpired ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-error-container text-error border border-error/30">
-                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-error-container text-error border border-error/30">
+                            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                             <span>Rule expired - requires human approval</span>
                           </div>
                         ) : ruleValidUntil ? (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-primary-container/40 text-primary border border-primary/30">
-                            <CalendarCheck className="w-3 h-3 shrink-0" />
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-primary-container/40 text-primary border border-primary/30">
+                            <CalendarCheck className="w-3.5 h-3.5 shrink-0" />
                             <span>
                               Rule active until {formatRuleValidUntil(ruleValidUntil)} ({daysRemaining}{' '}
                               {daysRemaining === 1 ? 'day' : 'days'} remaining)
                             </span>
                           </div>
                         ) : (
-                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-surface-container-high text-on-surface-variant border border-outline-variant/30">
-                            <ShieldCheck className="w-3 h-3 shrink-0 text-primary" />
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-surface-container-high text-on-surface-variant border border-outline-variant/30">
+                            <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-primary" />
                             <span>Perpetual rule (no expiration)</span>
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    {/* Progress bar / usage meter on its own dedicated sub-row */}
+                    <div className="flex flex-wrap items-center gap-3 text-xs">
+                      <div className="flex-1 min-w-[140px] max-w-sm bg-surface-container-highest h-2 rounded-full overflow-hidden shrink-0">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            consumedLitres >= maxStorageLitres
+                              ? 'bg-error'
+                              : usagePct >= 80
+                              ? 'bg-amber-400'
+                              : 'bg-primary'
+                          }`}
+                          style={{
+                            width: `${Math.min(100, Math.max(consumedLitres > 0 ? 4 : 0, usagePct))}%`,
+                          }}
+                        />
+                      </div>
+                      <span className="text-[11px] text-on-surface-variant tabular-nums whitespace-nowrap">
+                        <strong className="text-on-surface font-semibold">{consumedLitres.toFixed(1)}L</strong> / {maxStorageLitres.toLocaleString()}L ({usagePct}% used)
+                      </span>
                     </div>
                   </div>
 
