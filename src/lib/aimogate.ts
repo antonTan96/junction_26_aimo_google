@@ -219,6 +219,108 @@ export function evaluatePolicy(params: PolicyEvaluationParams): PolicyEvaluation
   return evaluateOrderPolicy(params);
 }
 
+/**
+ * Comprehensive short tag extractor for kitchen procurement prompts.
+ * Extracts normalized, concise descriptive and dietary tags based on Finnish and English keywords.
+ */
+export function extractShortTags(prompt: string): string[] {
+  const text = (prompt || '').toLowerCase();
+  const tags = new Set<string>();
+
+  // 1. Dietary & Allergen Tags
+  if (/\b(?:lactose[- ]free|laktoositon|laktosfri|eila)\b/i.test(text)) {
+    tags.add('lactose-free');
+  }
+  if (/\b(?:low[- ]lactose|vähälaktoosinen|hyla|låg laktos)\b/i.test(text)) {
+    tags.add('low-lactose');
+  }
+  if (/\b(?:gluten[- ]free|gluteeniton|glutenfri)\b/i.test(text)) {
+    tags.add('gluten-free');
+  }
+  if (/\b(?:vegan|vegaani|vegaaninen|maidoton|dairy[- ]free)\b/i.test(text)) {
+    tags.add('vegan');
+    tags.add('plant-based');
+  }
+  if (/\b(?:plant[- ]based|kasvipohjainen|kasviperäinen|oddlygood|oatly)\b/i.test(text)) {
+    tags.add('plant-based');
+  }
+  if (/\b(?:vegetarian|kasvis|kasvisruoka)\b/i.test(text) && !tags.has('vegan')) {
+    tags.add('vegetarian');
+  }
+  if (/\b(?:organic|luomu|luonnonmukainen|bio)\b/i.test(text)) {
+    tags.add('organic');
+  }
+  if (/\b(?:sugar[- ]free|sokeriton|ei lisättyä sokeria|sockerfri)\b/i.test(text)) {
+    tags.add('sugar-free');
+  }
+
+  // 2. Fat & Milk Grade Specifications
+  if (/\b(?:whole milk|täysmaito|täysmaitoa|punainen maito|full[- ]fat|täysrasvainen|täyskerma)\b/i.test(text) || /\bwhole\b/i.test(text)) {
+    tags.add('whole');
+  }
+  const isSemiSkimmed =
+    /\b(?:semi[- ]skimmed|semi skimmed|kevytmaito|kevytmaitoa|kevytkerma|low[- ]fat|vähärasvainen)\b/i.test(text) ||
+    /\bkevyt\b/i.test(text);
+  if (isSemiSkimmed) {
+    tags.add('semi-skimmed');
+  }
+  if (!isSemiSkimmed && /\b(?:skimmed|rasvaton|rasvatonta|sininen maito|fat[- ]free|rasvaton maito)\b/i.test(text)) {
+    tags.add('skimmed');
+  }
+
+  // 3. Processing & Storage State
+  if (/\b(?:fresh|tuore|tuoretta|chilled|kylmätuote)\b/i.test(text)) {
+    tags.add('fresh');
+  }
+  if (/\b(?:frozen|deep[- ]frozen|deepfrozen|pakaste|pakastettu|pakastetta|pakasteena|pakasteet)\b/i.test(text)) {
+    tags.add('frozen');
+  }
+  if (/\b(?:uht|esl|long[- ]life|iskuuumennettu|kestomaito|huoneenlämpö)\b/i.test(text)) {
+    tags.add('uht');
+  }
+
+  // 4. Product Properties & Usage Function
+  if (/\b(?:unsalted|suolaamaton|suolaamatonta)\b/i.test(text)) {
+    tags.add('unsalted');
+  }
+  if (/\b(?:salted|suolainen|suolattu|normaalisuolainen|merisuola)\b/i.test(text) && !tags.has('unsalted')) {
+    tags.add('salted');
+  }
+  if (/\b(?:barista|kahviin|vaahtoutuva|kahvimaito)\b/i.test(text)) {
+    tags.add('barista');
+  }
+  if (/\b(?:whipping|vispi|kuohu|kuohukerma|vispikerma|vispautuva)\b/i.test(text)) {
+    tags.add('whipping');
+  }
+  if (/\b(?:sour[- ]cream|sourcream|kermaviili|smetana|ranskankerma|creme fraiche)\b/i.test(text)) {
+    tags.add('sour-cream');
+  }
+  if (/\b(?:cooking|ruoanlaitto|leivonta|leivontaan|baking|ruokakerma)\b/i.test(text)) {
+    tags.add('cooking');
+  }
+
+  // 5. Base Ingredients & Origins
+  if (/\b(?:oat|kaura|kaurajuoma|oddlygood|oatly)\b/i.test(text)) {
+    tags.add('oat');
+  }
+  if (/\b(?:domestic|kotimainen|suomalainen|finnish|avainlippu|hyvää suomesta)\b/i.test(text)) {
+    tags.add('domestic');
+  }
+  if (/\b(?:novobox|bag[- ]in[- ]box|bib|kanisteri|canister|bulk|suurpakkaus)\b/i.test(text) || /\b10\s*l\b/i.test(text) || /\b5\s*l\b/i.test(text) || /\b10\s*kg\b/i.test(text)) {
+    tags.add('bulk');
+  }
+
+  // 6. Functional Kitchen Categories
+  if (/\b(?:sanitizer|disinfectant|pintadesinfektio|desinfektio|hygiene|hygienia|cleaning|pesuaine)\b/i.test(text)) {
+    tags.add('cleaning');
+  }
+  if (/\b(?:croissant|voicroissant|leipä|bread|pastry|bakery|leipomo)\b/i.test(text)) {
+    tags.add('bakery');
+  }
+
+  return Array.from(tags);
+}
+
 export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
   volume_litres: number;
   query: string;
@@ -242,21 +344,8 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
     volumeLitres = parseFloat(qtyMatch[1].replace(/,/g, '')) * 3.25;
   }
 
-  // 2. Preserve dietary and product attribute modifiers:
-  // organic / luomu, whole milk / täysmaito, skimmed milk / rasvaton maito, lactose-free / laktoositon, gluten-free / gluteeniton, vegan / plant-based / vegaani
-  const attributes: string[] = [];
-  if (text.includes('lactose-free') || text.includes('lactose free') || text.includes('laktoositon')) {
-    attributes.push('lactose-free');
-  }
-  if (text.includes('vegan') || text.includes('plant-based') || text.includes('plant based') || text.includes('vegaani')) {
-    attributes.push('vegan');
-  }
-  if (text.includes('gluten-free') || text.includes('gluten free') || text.includes('gluteeniton')) {
-    attributes.push('gluten-free');
-  }
-  if (text.includes('organic') || text.includes('luomu')) {
-    attributes.push('organic');
-  }
+  // 2. Extract possible short tags based on the prompt:
+  const attributes: string[] = extractShortTags(prompt);
 
   // 3. Extract department/location/time context without letting department nouns (bakery, coffee) hijack the product search query
   let cleaned = text

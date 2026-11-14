@@ -69,6 +69,101 @@ export function normalizeFinnishToken(token: string): string {
   return t;
 }
 
+/**
+ * Enriches catalog product dietary and descriptive short tags based on synkka classifications,
+ * product names, brands, and temperature conditions.
+ */
+export function enrichProductShortTags(
+  displayName: string,
+  nameFi: string,
+  nameEn: string,
+  existingTags: string[] = [],
+  tempCondition?: number
+): string[] {
+  const corpus = `${displayName} ${nameFi} ${nameEn} ${(existingTags || []).join(' ')}`.toLowerCase();
+  const tags = new Set<string>((existingTags || []).map((t) => t.toLowerCase()));
+
+  // 1. Dietary & Allergens
+  if (corpus.includes('laktoositon') || corpus.includes('lactose free') || corpus.includes('lactose-free') || tags.has('free_from_lactose')) {
+    tags.add('lactose-free');
+  }
+  if (corpus.includes('vähälaktoosinen') || corpus.includes('low lactose') || corpus.includes('low-lactose') || corpus.includes('hyla')) {
+    tags.add('low-lactose');
+  }
+  if (corpus.includes('gluteeniton') || corpus.includes('gluten free') || corpus.includes('gluten-free') || tags.has('free_from_gluten')) {
+    tags.add('gluten-free');
+  }
+  if (corpus.includes('vegaani') || corpus.includes('vegan') || tags.has('vegan')) {
+    tags.add('vegan');
+    tags.add('plant-based');
+  }
+  if (corpus.includes('kasvis') || corpus.includes('vegetarian')) {
+    tags.add('vegetarian');
+  }
+  if (corpus.includes('luomu') || corpus.includes('organic') || corpus.includes('eu_organic_farming') || tags.has('eu_organic_farming')) {
+    tags.add('organic');
+  }
+  if (corpus.includes('sokeriton') || corpus.includes('sugar-free')) {
+    tags.add('sugar-free');
+  }
+
+  // 2. Fat / Milk Content
+  if (corpus.includes('täysmaito') || corpus.includes('whole milk') || corpus.includes('vanhanajan') || corpus.includes('täysrasvainen')) {
+    tags.add('whole');
+  }
+  if (corpus.includes('kevytmaito') || corpus.includes('semi-skimmed') || corpus.includes('semi skimmed')) {
+    tags.add('semi-skimmed');
+  }
+  if (corpus.includes('rasvaton') || corpus.includes('skimmed') || corpus.includes('fat-free')) {
+    tags.add('skimmed');
+  }
+
+  // 3. Storage & Temperature Condition
+  if (tempCondition === 7 || corpus.includes('pakaste') || corpus.includes('frozen') || tags.has('freezetemperature')) {
+    tags.add('frozen');
+  }
+  if (corpus.includes('tuore') || corpus.includes('fresh') || (tempCondition !== undefined && tempCondition <= 4 && !tags.has('frozen') && !tags.has('uht'))) {
+    tags.add('fresh');
+  }
+  if (corpus.includes('uht') || corpus.includes('iskuuumennettu') || corpus.includes('long life') || corpus.includes('kestomaito') || tags.has('warmtemperature')) {
+    tags.add('uht');
+  }
+
+  // 4. Culinary function
+  if (corpus.includes('suolaamaton') || corpus.includes('unsalted')) {
+    tags.add('unsalted');
+  }
+  if (corpus.includes('suolattu') || corpus.includes('suolainen') || corpus.includes('normaalisuolainen') || corpus.includes('salted')) {
+    if (!tags.has('unsalted')) tags.add('salted');
+  }
+  if (corpus.includes('barista') || corpus.includes('kahviin') || corpus.includes('vaahtoutuva')) {
+    tags.add('barista');
+  }
+  if (corpus.includes('kuohukerma') || corpus.includes('vispikerma') || corpus.includes('vispi') || corpus.includes('whipping')) {
+    tags.add('whipping');
+  }
+  if (corpus.includes('kermaviili') || corpus.includes('smetana') || corpus.includes('sour cream') || corpus.includes('ranskankerma')) {
+    tags.add('sour-cream');
+  }
+  if (corpus.includes('ruokakerma') || corpus.includes('leivontaan') || corpus.includes('cooking')) {
+    tags.add('cooking');
+  }
+
+  // 5. Base Ingredients & Origin
+  if (corpus.includes('kaura') || corpus.includes('oat') || corpus.includes('oddlygood') || corpus.includes('oatly')) {
+    tags.add('oat');
+    tags.add('plant-based');
+  }
+  if (corpus.includes('valio') || corpus.includes('kotimainen') || corpus.includes('suomi') || tags.has('goods_from_finland_blue_swan') || tags.has('made_in_finland_flag_with_key')) {
+    tags.add('domestic');
+  }
+  if (corpus.includes('novobox') || corpus.includes('bag-in-box') || corpus.includes('10 l') || corpus.includes('10l') || corpus.includes('5 l') || corpus.includes('5l') || corpus.includes('10kg')) {
+    tags.add('bulk');
+  }
+
+  return Array.from(tags);
+}
+
 export const SYNONYM_GROUPS: string[][] = [
   ['butter', 'voi', 'meijerivoi'],
   ['milk', 'maito', 'mjölk'],
@@ -186,18 +281,14 @@ export class ValioAimoCatalogService {
             item.vendor_name || ''
           );
 
-          // Preserve organic dietary tag
-          const corpusLower = `${item.display_name} ${item.name_fi || ''} ${item.name_en || ''} ${(item.dietary_tags || []).join(' ')}`.toLowerCase();
-          if (
-            corpusLower.includes('organic') ||
-            corpusLower.includes('luomu') ||
-            corpusLower.includes('eu_organic_farming') ||
-            (item.dietary_tags || []).includes('eu_organic_farming')
-          ) {
-            if (!item.dietary_tags.includes('organic')) {
-              item.dietary_tags.push('organic');
-            }
-          }
+          // Enrich product with normalized short tags (dietary, fat level, storage condition, culinary purpose)
+          item.dietary_tags = enrichProductShortTags(
+            item.display_name,
+            item.name_fi || '',
+            item.name_en || '',
+            item.dietary_tags || [],
+            item.temperature_condition
+          );
 
           this.productMap.set(item.id, item);
         }
@@ -300,6 +391,15 @@ export class ValioAimoCatalogService {
       // Determine Category
       const category = this.categorizeProduct(displayName, fiName, tags, p.vendorName || '');
 
+      // Enrich product with normalized short tags (dietary, fat level, storage condition, culinary purpose)
+      const enrichedTags = enrichProductShortTags(
+        displayName,
+        fiName,
+        enName,
+        tags,
+        p.temperatureCondition
+      );
+
       // Pack format formatting
       let packFormat = p.salesUnit || 'PCE';
       const lowerName = displayName.toLowerCase();
@@ -310,7 +410,7 @@ export class ValioAimoCatalogService {
       else if (lowerName.includes('500 g') || lowerName.includes('500g')) packFormat = '500g Pack';
       else if (vol > 1) packFormat = `${vol}L Unit`;
 
-      const corpus = `${displayName} ${fiName} ${svName} ${p.vendorName || ''} ${synkka.brand || ''} ${tags.join(' ')}`.toLowerCase();
+      const corpus = `${displayName} ${fiName} ${svName} ${p.vendorName || ''} ${synkka.brand || ''} ${enrichedTags.join(' ')}`.toLowerCase();
 
       const item: CatalogProduct = {
         id: String(p.id),
@@ -322,7 +422,7 @@ export class ValioAimoCatalogService {
         vendor_name: p.vendorName || 'Valio Aimo',
         brand: synkka.brand || 'Valio',
         category,
-        dietary_tags: tags,
+        dietary_tags: enrichedTags,
         pack_format: packFormat,
         pack_volume_litres: Number(vol.toFixed(3)),
         temperature_condition: p.temperatureCondition || 4,
@@ -658,7 +758,14 @@ export class ValioAimoCatalogService {
     ];
 
     return staples.map((s) => {
-      const corpus = `${s.display_name} ${s.name_fi} ${s.name_en} ${s.brand} ${(s.dietary_tags || []).join(' ')}`.toLowerCase();
+      const enrichedTags = enrichProductShortTags(
+        s.display_name!,
+        s.name_fi!,
+        s.name_en!,
+        s.dietary_tags || [],
+        4
+      );
+      const corpus = `${s.display_name} ${s.name_fi} ${s.name_en} ${s.brand} ${enrichedTags.join(' ')}`.toLowerCase();
       return {
         id: s.id!,
         gtin: '640946000000',
@@ -669,7 +776,7 @@ export class ValioAimoCatalogService {
         vendor_name: 'Valio Aimo',
         brand: s.brand || 'Valio',
         category: s.category || 'dairy',
-        dietary_tags: s.dietary_tags || [],
+        dietary_tags: enrichedTags,
         pack_format: s.pack_format || 'PCE',
         pack_volume_litres: s.pack_volume_litres || 1.0,
         temperature_condition: 4,
@@ -737,12 +844,23 @@ export class ValioAimoCatalogService {
     for (const p of this.products) {
       if (!p.is_active) continue;
       if (category && category !== 'all' && p.category !== category) continue;
-      if (reqTags.length > 0 && !reqTags.every((t) => p.dietary_tags.includes(t))) continue;
 
       const lowerDisplay = p.display_name.toLowerCase();
       const lowerFi = p.name_fi.toLowerCase();
       const lowerBrand = p.brand.toLowerCase();
       const normalizedCorpus = p.search_corpus.replace(/[-_]/g, ' ');
+      const pTags = p.dietary_tags || [];
+
+      // 1. Strict dietary requirements (hard filters if requested):
+      if (reqTags.includes('gluten-free') && !pTags.includes('gluten-free') && !normalizedCorpus.includes('gluten-free') && !normalizedCorpus.includes('gluteeniton')) {
+        continue;
+      }
+      if (reqTags.includes('vegan') && !pTags.includes('vegan') && p.category !== 'plant-based' && !normalizedCorpus.includes('vegaani')) {
+        continue;
+      }
+      if (reqTags.includes('lactose-free') && !pTags.includes('lactose-free') && p.category !== 'plant-based' && !normalizedCorpus.includes('laktoositon') && !lowerDisplay.includes('laktoositon')) {
+        continue;
+      }
 
       // Intent Enforcement:
       // 1. For cooking butter, butter or voi is mandatory (do not match quick cooking rice)
@@ -895,6 +1013,29 @@ export class ValioAimoCatalogService {
         // Staple brand priority
         if (lowerBrand.includes('valio') || lowerBrand.includes('oddlygood') || lowerBrand.includes('paulig')) {
           score += 20;
+        }
+
+        // Short tag matching & relevance score bonus
+        let tagMatchCount = 0;
+        for (const t of reqTags) {
+          const matchesTag =
+            pTags.includes(t) ||
+            lowerDisplay.includes(t) ||
+            lowerFi.includes(t) ||
+            normalizedCorpus.includes(t);
+
+          if (matchesTag) {
+            tagMatchCount++;
+            score += 70;
+            if (['whole', 'skimmed', 'semi-skimmed', 'unsalted', 'barista', 'frozen', 'whipping', 'organic'].includes(t)) {
+              score += 40;
+            }
+          }
+        }
+
+        // Bonus if all prompt tags are satisfied
+        if (reqTags.length > 0 && tagMatchCount === reqTags.length) {
+          score += 100;
         }
 
         // Specific boosts & penalties
