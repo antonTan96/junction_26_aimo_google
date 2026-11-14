@@ -1233,9 +1233,9 @@ export class AimoGateStore {
     req: {
       quote_id: string;
       po_reference: string;
-      traces?: AgentStepTrace[];
-      offer_comparisons?: PublicOfferDTO[];
-      items?: OrderItemDTO[];
+      traces?: AgentStepTrace[] | null;
+      offer_comparisons?: PublicOfferDTO[] | null;
+      items?: OrderItemDTO[] | null;
       recipe_name?: string | null;
       substitution_request?: SubstitutionRequestDTO | null;
     },

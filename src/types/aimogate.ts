@@ -126,9 +126,9 @@ export interface OrderDTO {
   pack_quantity: number | null;
   total_litres: number | null;
   verification_hash?: string;
-  traces?: AgentStepTrace[];
-  offer_comparisons?: PublicOfferDTO[];
-  items?: OrderItemDTO[];
+  traces?: AgentStepTrace[] | null;
+  offer_comparisons?: PublicOfferDTO[] | null;
+  items?: OrderItemDTO[] | null;
   recipe_name?: string | null;
   substitution_request?: SubstitutionRequestDTO | null;
 }

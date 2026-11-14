@@ -404,7 +404,10 @@ export class PersistentAimoGateStore {
       quote_id: string;
       po_reference: string;
       traces?: OrderDTO['traces'];
-      offer_comparisons?: PublicOfferDTO[];
+      offer_comparisons?: OrderDTO['offer_comparisons'];
+      items?: OrderDTO['items'];
+      recipe_name?: OrderDTO['recipe_name'];
+      substitution_request?: OrderDTO['substitution_request'];
     }
   ): Promise<OrderDTO> {
     return this.enqueue(async () => {
