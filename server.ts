@@ -332,7 +332,7 @@ export async function createApp() {
         return;
       }
 
-      // Default to Google Gemini 2.5 Flash / Pro RAG pipeline (with fallback to Nemotron & Deterministic)
+      // Default to Google Gemini Flash / Pro RAG pipeline (with deterministic fallback)
       const tenantId = req.body?.tenant_id || DEFAULT_TENANT_ID;
       const policy = await store.getPolicy(tenantId);
       const orders = await store.getOrders(tenantId);
@@ -592,9 +592,8 @@ export async function createApp() {
         source_dataset: 'valio_aimo_junction26_product_data.json (17,546 SKUs)',
         rag_enabled: true,
         llm: {
-          primary_model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-          provider: 'Google DeepMind (Gemini 2.5 Flash / Pro)',
-          secondary_provider: 'DataCrunch B300 (NVIDIA Nemotron 3.5 Super-VL)',
+          primary_model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+          provider: 'Google DeepMind (Gemini Flash / Pro)',
           fallback: 'Deterministic Culinary Ontology & Wholesaler Unit-Economics Solver',
         },
         upstream_api: {

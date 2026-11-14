@@ -6,7 +6,6 @@ import {
 } from '../types/aimogate.ts';
 import { extractShortTags } from './aimogate.ts';
 import { GeminiClient } from './geminiClient.ts';
-import { NemotronClient } from './nemotronClient.ts';
 
 export interface BaseRecipeIngredient {
   name: string;
@@ -565,34 +564,53 @@ export function deduceRecipeFromOntology(
  * Parse an explicit multi-material or comma-separated recipe string.
  */
 export function parseExplicitMaterialList(text: string, dietaryTags: string[] = []): DecomposedIngredient[] {
-  // Strip enclosing quotes and clean input
+  // Strip enclosing and embedded quotes and clean input
   let cleanInput = text
-    .replace(/^["'“”«»]+|["'“”«»]+$/g, '')
+    .replace(/["'“”«»]+/g, ' ')
     .trim();
 
-  // Strip meta phrases, delivery timing, and agent instructions before splitting
+  // Strip operational directives, delivery timing, and agent instructions before splitting
+  const directivePatterns = [
+    /\b(?:please\s+)?(?:check|verify|lookup)\s+(?:fixed\s+)?(?:contract\s+)?(?:prices?|pricing|availability|stock)\b/gi,
+    /\b(?:please\s+)?(?:lock\s+(?:the\s+)?(?:quote|price)|commit\s+(?:the\s+)?(?:order|quote)|confirm\s+(?:the\s+)?order|place\s+(?:the\s+)?order|submit\s+(?:the\s+)?order)\b/gi,
+    /\b(?:if\s+it\s+complies\s+with\s+)?(?:our\s+)?(?:autonomous\s+)?purchasing\s+rules\b/gi,
+    /\b(?:find\s+an\s+option\s+)?(?:that\s+)?meets?\s+(?:our\s+)?requirements\b/gi,
+    /\b(?:find\s+an\s+option\s+)?based\s+on\s+(?:price|pricing|availability|saatavuus|hinta)(?:\s+(?:and|sekä|ja)\s+(?:price|pricing|availability|saatavuus|hinta))?\b/gi,
+    /\bhinnan\s+ja\s+saatavuuden\s+mukaan\b/gi,
+    /\bfind\s+an\s+option\b/gi,
+    /\bfixed\s+contract\s+prices?\b/gi,
+    /\bcontract\s+prices?\b/gi,
+    /\bwithin\s+policy(?:\s+limits)?\b/gi,
+    /\bautonomous\s+purchasing\b/gi,
+    /\b(?:by|before|until|for)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
+    /\b(?:for\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
+    /\b(?:morning|afternoon|evening)\s+delivery\b/gi,
+    /\bavailability\b/gi,
+  ];
+
+  for (const pat of directivePatterns) {
+    cleanInput = cleanInput.replace(pat, ' ');
+  }
+
   cleanInput = cleanInput
-    .replace(/\b(?:check|verify|lookup)\s+(?:fixed\s+)?(?:contract\s+)?(?:prices?|pricing|availability|stock).*$/gi, '')
-    .replace(/\b(?:lock\s+(?:the\s+)?quote|commit\s+(?:the\s+)?order|if\s+it\s+complies\s+with\s+(?:our\s+)?(?:autonomous\s+)?(?:purchasing\s+)?rules).*$/gi, '')
-    .replace(/\b(?:find\s+an\s+option|based\s+on\s+(?:price|availability)).*$/gi, '')
-    .replace(/\bhinnan\s+ja\s+saatavuuden\s+mukaan.*$/gi, '')
-    .replace(/\b(?:by|before|until|for)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?.*$/gi, '')
     .replace(/(\d+),(\d{3})\b/g, '$1$2')
     .replace(/^(?:recipe\s+for\s+[^:,\n]+[:,\-]|resepti\s*:\s*|ingredients\s*:\s*|ainekset\s*:\s*)/i, '')
+    .replace(/\s*\.\s*/g, ', ')
     .trim();
 
   // Split on "and", "plus", "sekä", "ja", semicolons, commas preceding numbers or quantities, or newlines
   const segments = cleanInput
-    .split(/\n+|;\s*|\s+(?:and|plus|sekä|ja)\s+|,\s*(?=\d|\ban?\b|\bsome\b)/i)
-    .map((s) => s.replace(/^["'“”«»]+|["'“”«»]+$/g, '').trim())
+    .split(/\n+|;\s*|\s+(?:and|plus|sekä|ja)\s+|,\s*(?=(?:[a-zA-Z\s]+?\s+)?\d+(?:\.\d+)?\s*(?:l|litres?|liter|liters|kg|kilo|kilos|boxes?|packs?|units?|g)\b)/i)
+    .map((s) => s.replace(/^[,\.\s\-]+|[,\.\s\-]+$/g, '').trim())
     .filter(Boolean);
 
   const items: DecomposedIngredient[] = [];
 
   for (let seg of segments) {
     seg = seg
+      .replace(/^[,\.\s\-]+/g, '')
       .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme)\s+/gi, '')
-      .replace(/^["'“”«»]+|["'“”«»]+$/g, '')
+      .replace(/^[,\.\s\-]+|[,\.\s\-]+$/g, '')
       .trim();
 
     // Quantity regex: e.g. "50 liters of organic whole milk", "10kg butter", "20 boxes croissants"
@@ -634,15 +652,17 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
     const cleanItem = itemName
       .replace(/\bfor\s+(?:the\s+)?(?:bakery|kitchen|cafeteria|breakfast|event)\b/gi, '')
       .replace(/\b(?:for\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi, '')
+      .replace(/\b(?:and|or|then|that)\s*$/gi, '')
+      .replace(/^[,\.\s\-]+|[,\.\s\-]+$/g, '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    const stopWords = /^(?:availability|price|pricing|saatavuus|hinta|option|options|requirement|requirements|asap|friday|monday|thursday|tuesday|wednesday|saturday|sunday|quote|order|lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules)$/i;
+    const stopWords = /^(?:availability|price|pricing|saatavuus|hinta|option|options|requirement|requirements|asap|friday|monday|thursday|tuesday|wednesday|saturday|sunday|quote|order|lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules|rules|compliance)$/i;
     if (
       !cleanItem ||
       cleanItem.length < 2 ||
       stopWords.test(cleanItem) ||
-      /\b(?:lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules|check\s+fixed|contract\s+prices?)\b/i.test(cleanItem)
+      /\b(?:lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules|check\s+fixed|contract\s+prices?|autonomous\s+purchasing)\b/i.test(cleanItem)
     ) {
       continue;
     }
@@ -797,32 +817,20 @@ export function preprocessBuyerPromptSync(
   }
 
   // 3. Identify if prompt contains multiple materials joined by "and", commas, or line breaks
-  const cleanedPromptForMulti = prompt
-    .replace(/\b(?:find\s+an\s+option|check\s+(?:price|availability)|based\s+on\s+(?:price|availability)).*$/gi, '')
-    .replace(/\bhinnan\s+ja\s+saatavuuden\s+mukaan.*$/gi, '')
-    .trim();
-
-  const hasMultipleItems =
-    /\b(?:and|plus|sekä)\b/i.test(cleanedPromptForMulti) &&
-    /\d+\s*(?:l|litres?|kg|kilo|boxes?|cartons?|packs?|units?)/i.test(cleanedPromptForMulti);
-
-  if (hasMultipleItems) {
-    const items = parseExplicitMaterialList(prompt, dietaryTags);
-    if (items.length > 1) {
-      return {
-        raw_prompt: prompt,
-        request_type: 'multi_item',
-        dietary_tags: dietaryTags,
-        deliver_by: deliverBy,
-        items,
-        notes: `Decomposed multi-item procurement request into ${items.length} distinct product lines.`,
-      };
-    }
+  const parsedMaterials = parseExplicitMaterialList(prompt, dietaryTags);
+  if (parsedMaterials.length > 1) {
+    return {
+      raw_prompt: prompt,
+      request_type: 'multi_item',
+      dietary_tags: dietaryTags,
+      deliver_by: deliverBy,
+      items: parsedMaterials,
+      notes: `Decomposed multi-item procurement request into ${parsedMaterials.length} distinct product lines.`,
+    };
   }
 
   // 4. Default: Single Item Procurement Request
-  const singleItems = parseExplicitMaterialList(prompt, dietaryTags);
-  const primaryItem = singleItems[0] || {
+  const primaryItem = parsedMaterials[0] || {
     ingredient_name: prompt.trim(),
     search_query: prompt.trim(),
     quantity: 1,
@@ -845,7 +853,7 @@ export function preprocessBuyerPromptSync(
 /**
  * Preprocess natural language buyer prompts into structured procurement items,
  * identifying recipes, deducing necessary raw materials, and scaling quantities.
- * Async wrapper with optional Nemotron LLM fallback for open-ended uncataloged recipes.
+ * Async wrapper with Google Gemini reasoning for open-ended uncataloged recipes.
  */
 export async function preprocessBuyerPrompt(
   prompt: string,
@@ -918,94 +926,5 @@ export async function preprocessBuyerPrompt(
   }
 
   const syncResult = preprocessBuyerPromptSync(prompt, now);
-  if (syncResult.request_type !== 'single_item') {
-    return syncResult;
-  }
-
-  // 2. Fallback to Nemotron if Gemini is not configured
-  if (process.env.DISABLE_REMOTE_LLM !== 'true') {
-    try {
-      const nemotron = NemotronClient.getInstance();
-      const llmResult = await queryNemotronForRecipe(prompt, nemotron);
-      if (llmResult && llmResult.items && llmResult.items.length > 0) {
-        return {
-          ...llmResult,
-          raw_prompt: prompt,
-          deliver_by: syncResult.deliver_by,
-        };
-      }
-    } catch {
-      // Fallback gracefully to sync result
-    }
-  }
-
   return syncResult;
-}
-
-/**
- * Invoke remote NVIDIA Nemotron LLM to parse open-ended or custom recipes into structured JSON.
- */
-async function queryNemotronForRecipe(
-  prompt: string,
-  nemotron: NemotronClient
-): Promise<PreprocessedPromptResult | null> {
-  const systemPrompt = `You are an expert commercial chef and B2B procurement analyst for Valio Aimo food wholesale.
-When given a recipe or procurement prompt, deduce the raw ingredients needed to prepare it.
-Output strictly valid JSON matching this schema:
-{
-  "request_type": "recipe" | "multi_item",
-  "recipe": {
-    "name": string,
-    "servings_or_yield": number,
-    "yield_unit": string,
-    "cuisine": string
-  },
-  "dietary_tags": string[],
-  "items": [
-    {
-      "ingredient_name": string,
-      "search_query": string,
-      "quantity": number,
-      "unit": "kg" | "L" | "units" | "packs",
-      "category_hint": "dairy" | "bakery" | "produce" | "meat" | "beverages" | "plant-based" | "cleaning",
-      "dietary_tags": string[],
-      "importance": "essential" | "optional",
-      "culinary_role": string
-    }
-  ]
-}`;
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 6000); // 6s timeout
-
-  try {
-    const res = await fetch(`${nemotron.getEndpoint().replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${(nemotron as any).apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: nemotron.getModelName(),
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Deduce ingredients and quantities for: "${prompt}"` },
-        ],
-        response_format: { type: 'json_object' },
-        max_tokens: 1024,
-        temperature: 0.1,
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-
-    if (!res.ok) return null;
-    const data = (await res.json()) as any;
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return null;
-    return JSON.parse(content);
-  } catch {
-    clearTimeout(timeout);
-    return null;
-  }
 }

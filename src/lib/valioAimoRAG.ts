@@ -1,6 +1,5 @@
 import { ValioAimoCatalogService, type CatalogProduct } from './valioAimoCatalog.ts';
 import { GeminiClient } from './geminiClient.ts';
-import { NemotronClient } from './nemotronClient.ts';
 import {
   parseBuyerPrompt,
   evaluateOrderPolicy,
@@ -110,14 +109,23 @@ export class ValioAimoRAGService {
    */
   public async executeRAGPipeline(params: {
     prompt: string;
-    policy: TenantPolicy;
+    policy?: TenantPolicy | null;
     existingOrders?: OrderDTO[];
     customer?: string;
     store?: { killswitchHalted?: boolean; [key: string]: any };
     killswitchHalted?: boolean;
   }): Promise<RAGExecutionResult> {
     const t0 = Date.now();
-    const { prompt, policy, existingOrders = [], customer = '123' } = params;
+    const { prompt, existingOrders = [], customer = '123' } = params;
+    const policy: TenantPolicy = params.policy || {
+      tenant_id: 'default',
+      tenant_name: 'Default Tenant',
+      max_auto_approve_eur: 1500.0,
+      max_auto_approve_litres: 1000.0,
+      allowed_categories: ['dairy', 'bakery', 'produce', 'beverages'],
+      anomaly_sensitivity_pct: 15,
+      auto_dispute_enabled: true,
+    };
     const isKillswitchHalted = Boolean(
       params.killswitchHalted ??
       params.store?.killswitchHalted ??
@@ -447,8 +455,8 @@ export class ValioAimoRAGService {
         notes.push(`Insufficient stock: need ${packsNeeded} packs, only ${availablePacks} available`);
       }
 
-      if (totalCost > policy.max_auto_approve_eur) {
-        notes.push(`Cost €${totalCost} exceeds auto-approval cap of €${policy.max_auto_approve_eur}`);
+      if (totalCost > (policy?.max_auto_approve_eur ?? 1500.0)) {
+        notes.push(`Cost €${totalCost} exceeds auto-approval cap of €${policy?.max_auto_approve_eur ?? 1500.0}`);
       }
 
       return {
@@ -483,7 +491,7 @@ export class ValioAimoRAGService {
       })),
     });
 
-    // Step 3: Synthesis & Selection using Google Gemini 2.5 (or fallback to Nemotron / Deterministic)
+    // Step 3: Synthesis & Selection using Google Gemini (or fallback to Deterministic)
     const gemini = GeminiClient.getInstance();
     const geminiDecision = await gemini.reasonProcurement({
       prompt,
@@ -492,31 +500,19 @@ export class ValioAimoRAGService {
       requiredVolume: parsed.volume_litres,
     });
 
-    const nemotron = !geminiDecision ? NemotronClient.getInstance() : null;
-    const nemotronDecision = nemotron
-      ? await nemotron.reasonProcurement({
-          prompt,
-          candidates: candidateContexts,
-          policy,
-          requiredVolume: parsed.volume_litres,
-        })
-      : null;
-
-    const activeLlmDecision = geminiDecision || nemotronDecision;
-
     let selected: RAGProductContext;
     let selectedPacks = 1;
     let selectedCost = 0;
     let aiExplanation = '';
     let chainOfThought: string | undefined = undefined;
 
-    if (activeLlmDecision) {
-      const match = candidateContexts.find((c) => c.product.id === activeLlmDecision.selectedSku);
+    if (geminiDecision) {
+      const match = candidateContexts.find((c) => c.product.id === geminiDecision.selectedSku);
       selected = match || candidateContexts[0];
-      selectedPacks = activeLlmDecision.packsToOrder || selected.packsRequired;
+      selectedPacks = geminiDecision.packsToOrder || selected.packsRequired;
       selectedCost = Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
-      aiExplanation = activeLlmDecision.reasoning;
-      chainOfThought = activeLlmDecision.chainOfThought;
+      aiExplanation = geminiDecision.reasoning;
+      chainOfThought = geminiDecision.chainOfThought;
     } else {
       // Deterministic unit-economics fallback
       const availableCandidates = candidateContexts.filter((c) => c.isAvailable && c.availablePacks >= c.packsRequired);
@@ -632,8 +628,6 @@ export class ValioAimoRAGService {
 
     const activeModelName = geminiDecision
       ? geminiDecision.model
-      : nemotronDecision
-      ? nemotronDecision.model
       : 'deterministic-solver';
 
     traces.push({
@@ -642,12 +636,10 @@ export class ValioAimoRAGService {
         ? 'RAG Step 3: Inventory Shortage & Substitution Request Formulated'
         : geminiDecision
         ? `RAG Step 3: Google Gemini (${geminiDecision.model}) Autonomous Trade Reasoning`
-        : nemotronDecision
-        ? 'RAG Step 3: NVIDIA Nemotron-3.5-Super-VL Reasoning (DataCrunch B300)'
         : 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
       description: `${aiExplanation} Policy evaluation: ${policyEval.passes ? 'PASSED (Auto-Approve)' : `REQUIRES SIGN-OFF (${policyEval.violations.join('; ')})`}.`,
       action_type: 'reasoning',
-      latency_ms: activeLlmDecision?.latencyMs || 12,
+      latency_ms: geminiDecision?.latencyMs || 12,
       tool_output: {
         model: activeModelName,
         selected_sku: selected.product.id,
@@ -689,8 +681,6 @@ export class ValioAimoRAGService {
       success: true,
       mode_used: geminiDecision
         ? geminiDecision.model
-        : nemotronDecision
-        ? 'nemotron-3.5-super-vl'
         : 'rag-augmented',
       execution_time_ms: Date.now() - t0,
       traces,

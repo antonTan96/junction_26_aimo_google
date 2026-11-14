@@ -244,13 +244,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
               </div>
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-surface-container-high text-[11px] font-medium text-primary border border-primary/20">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>
-                  {agentResponse?.mode_used?.includes('gemini')
-                    ? 'Google Gemini 2.5 Flash'
-                    : agentResponse?.mode_used?.includes('nemotron')
-                    ? 'NVIDIA Nemotron 3.5'
-                    : 'Google Gemini 2.5 Flash'}
-                </span>
+                <span>Google Gemini Flash</span>
               </div>
             </div>
 
@@ -410,7 +404,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
             <button
               type="button"
               disabled={isRunningAgent || !prompt.trim()}
-              onClick={() => onRunAgent(prompt, 'deterministic')}
+              onClick={() => onRunAgent(prompt, 'rag')}
               className="w-full py-3 px-4 rounded-xl bg-primary hover:bg-primary-fixed text-on-primary font-semibold text-sm transition-colors cursor-pointer disabled:opacity-50"
             >
               {isRunningAgent ? 'Checking Valio Aimo Stock & Prices...' : 'Place Order'}
@@ -904,7 +898,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                         type="button"
                         onClick={() => {
                           setPrompt(sch.prompt);
-                          onRunAgent(sch.prompt, 'deterministic');
+                          onRunAgent(sch.prompt, 'rag');
                         }}
                         className="px-2.5 py-1 rounded-lg bg-surface-container-high text-xs font-medium text-primary hover:bg-surface-container-highest transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                       >

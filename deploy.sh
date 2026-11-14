@@ -10,9 +10,8 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-junction26hel-7631}"
 REGION="${REGION:-europe-north1}"
 SERVICE_NAME="${SERVICE_NAME:-aimogate-api}"
-DATACRUNCH_ENDPOINT="${DATACRUNCH_ENDPOINT:-https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1}"
-DATACRUNCH_MODEL="${DATACRUNCH_MODEL:-nemotron-3.5-super-vl}"
-DATACRUNCH_API_KEY="${DATACRUNCH_API_KEY:-dc_176bde1bc2f74ecb83a0640d93d6bb20589aa5d227eaf9fd7208fe2985f7ded208b41c8f4049cf95c838f57290f0c94dfb8d0f4e93de8327352454c4ca19f230429045b393256b150e50a5738583b6b6e58e129bf00a0757a7b1b88c75c44118d1553782e5d0988f7698d3558c4b2ea2f8f974baee5038ebf153ac3bf671201a}"
+GEMINI_MODEL="${GEMINI_MODEL:-gemini-flash-latest}"
+GEMINI_API_KEY="${GEMINI_API_KEY:-}"
 VALIO_API_BASE_URL="${VALIO_API_BASE_URL:-https://junction26.valioaimo.fi}"
 VALIO_API_KEY="${VALIO_API_KEY:-junct_tDnQn4VI_nfhELGCOEkY4vbuxm324MmYmILuokYG03Y}"
 
@@ -45,7 +44,7 @@ gcloud run deploy "$SERVICE_NAME" \
   --source=. \
   --region="$REGION" \
   --allow-unauthenticated \
-  --set-env-vars="DATACRUNCH_ENDPOINT=$DATACRUNCH_ENDPOINT,DATACRUNCH_MODEL=$DATACRUNCH_MODEL,DATACRUNCH_API_KEY=$DATACRUNCH_API_KEY,VALIO_API_BASE_URL=$VALIO_API_BASE_URL,VALIO_API_KEY=$VALIO_API_KEY"
+  --set-env-vars="GEMINI_API_KEY=$GEMINI_API_KEY,GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-latest},VALIO_API_BASE_URL=$VALIO_API_BASE_URL,VALIO_API_KEY=$VALIO_API_KEY"
 
 # Retrieve Cloud Run Service URL
 RUN_URL=$(gcloud run services describe "$SERVICE_NAME" --project="$PROJECT_ID" --region="$REGION" --format="value(status.url)")

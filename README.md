@@ -15,10 +15,10 @@ It enables kitchen teams to request supplies in plain English, while an autonomo
      - Real-time catalog price and comparison price per litre/kg (`POST /api/price`).
      - Real-time warehouse availability and order cut-off times (`POST /api/availability`).
 
-2. **NVIDIA Nemotron 3.5 Super VL 120B Reasoning**:
-   - Powered by **NVIDIA Nemotron-3.5-Super-VL** running on **DataCrunch B300** vLLM infrastructure.
-   - Performs multi-step mathematical trade-off calculations (pack conversions, unit economics, inventory sufficiency, and dietary compliance).
-   - Generates transparent chain-of-thought audit traces for every procurement proposal.
+2. **Google Gemini Flash / Pro Autonomous Reasoning**:
+   - Powered by **Google Gemini** via the official `@google/genai` SDK (`gemini-flash-latest`, `gemini-3.8-flash`, `gemini-2.5-pro`).
+   - Performs commercial culinary recipe deduction, material BOM formulation, unit economics analysis, and inventory optimization.
+   - Generates transparent chain-of-thought audit traces for every procurement proposal (with deterministic unit-economics solver fallback).
 
 3. **Autonomous Governance & Policy Guardrails**:
    - **Spending Caps**: Auto-approves orders within budget (e.g. up to €1,000); flags excess for manager approval.
@@ -68,8 +68,8 @@ flowchart TD
     end
 
     subgraph External["External Services & Upstream APIs"]
-        subgraph DataCrunch["DataCrunch B300 Infrastructure"]
-            Nemotron["NVIDIA Nemotron 3.5 Super VL 120B<br/>(Chain-of-Thought Reasoning & Optimization)"]
+        subgraph GoogleAI["Google Cloud & DeepMind Infrastructure"]
+            Gemini["Google Gemini Flash / Pro<br/>(@google/genai Reasoning & Recipe Deduction)"]
         end
 
         subgraph ValioAPI["Valio Aimo Upstream API"]
@@ -92,8 +92,8 @@ flowchart TD
     CandidateScorer --> ValioPrice
     CandidateScorer --> ValioStock
     
-    CandidateScorer --> Nemotron
-    Nemotron --> Firewall
+    CandidateScorer --> Gemini
+    Gemini --> Firewall
     
     Firewall --> RBAC
     Firewall --> Caps
@@ -110,7 +110,7 @@ flowchart TD
 1. **Natural Language Procurement**: Chefs and buyers submit unstructured procurement requests in English or Finnish (e.g. `"50 litraa luomu täysmaitoa"` or `"10kg butter for the bakery"`).
 2. **Intent Parsing & Suffix Normalization**: Extracts quantities, unit types, and removes contextual department phrases to prevent keyword hijacking while normalizing Finnish morphological inflections (`täysmaitoa → täysmaito`).
 3. **Semantic Catalog Retrieval & Live Upstream Augmentation**: Queries the 17,546 Valio Aimo catalog with noun-weighted term matching, then queries the official Valio Aimo API in real time for live pricing (`/api/price`) and stock availability (`/api/availability`).
-4. **NVIDIA Nemotron 3.5 Super VL Reasoning**: Evaluates candidate trade-offs on DataCrunch B300 hardware, calculating exact pack requirements, unit economics, dietary compliance, and transparent chain-of-thought traces (with deterministic fallback).
+4. **Google Gemini Autonomous Reasoning**: Evaluates candidate trade-offs on Google Cloud infrastructure, calculating exact pack requirements, unit economics, dietary compliance, and transparent chain-of-thought traces (with deterministic fallback).
 5. **Zero-Trust Policy Firewall**: Validates orders against tenant spending limits, rolling weekly storage volume caps (e.g. 1,000L/week dairy), rule expiration windows (`rule_valid_until`), category whitelists, and emergency circuit breakers before reserving or approving inventory.
 
 ---
@@ -129,7 +129,7 @@ gcloud run deploy aimogate-api \
   --source . \
   --region=europe-north1 \
   --allow-unauthenticated \
-  --set-env-vars="DATACRUNCH_ENDPOINT=https://containers.datacrunch.io/nemotron-3-5-super-vl-b300/v1,DATACRUNCH_MODEL=nemotron-3.5-super-vl,VALIO_API_BASE_URL=https://junction26.valioaimo.fi"
+  --set-env-vars="GEMINI_API_KEY=<YOUR_KEY>,GEMINI_MODEL=gemini-flash-latest,VALIO_API_BASE_URL=https://junction26.valioaimo.fi"
 ```
 
 ### Step 2: Deploy Frontend & Rules to Firebase Hosting
@@ -166,7 +166,7 @@ npm run deploy:full
 This single command:
 1. Runs regression tests (`aimogate.test.ts`, `rag.test.ts`) and TypeScript linting.
 2. Builds the Vite production bundle.
-3. Builds and deploys the Cloud Run service `aimogate-api` with the Nemotron 3.5 Super VL endpoint and Valio Aimo credentials.
+3. Builds and deploys the Cloud Run service `aimogate-api` with the Google Gemini reasoning engine and Valio Aimo credentials.
 4. Deploys Firebase Hosting with the `/api/**` rewrite to Cloud Run.
 5. Verifies live health on the catalog status endpoint (`/api/v1/catalog/status`).
 
