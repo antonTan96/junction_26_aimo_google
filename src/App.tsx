@@ -348,6 +348,39 @@ export default function App() {
     }
   };
 
+  const handleAcceptSubstitution = async (orderId: string, autoCreateRule = false) => {
+    const res = await authFetch(`${API_BASE}/orders/${orderId}/substitution/accept?tenant_id=${selectedTenant}`, {
+      method: 'POST',
+      body: JSON.stringify({ auto_create_rule: autoCreateRule }),
+    });
+    if (res.ok) {
+      await refreshAllData(selectedTenant);
+      showToast(
+        autoCreateRule
+          ? `Substitution accepted and standing pre-approved rule saved for future orders.`
+          : `Substitution accepted for order ${orderId}.`,
+        'success'
+      );
+    } else {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      showToast(`Action failed (${res.status}): ${err.detail}`, 'error');
+    }
+  };
+
+  const handleRejectSubstitution = async (orderId: string, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/orders/${orderId}/substitution/reject?tenant_id=${selectedTenant}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: reason || 'Substitution declined by buyer' }),
+    });
+    if (res.ok) {
+      await refreshAllData(selectedTenant);
+      showToast(`Substitution rejected. Order ${orderId} cancelled and reserved stock released.`, 'warning');
+    } else {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      showToast(`Action failed (${res.status}): ${err.detail}`, 'error');
+    }
+  };
+
   const handleRevokeGrant = async (grantId: string) => {
     const res = await fetch(`${API_BASE}/admin/recurrent-grants/${grantId}/revoke`, {
       method: 'POST',
@@ -454,6 +487,8 @@ export default function App() {
             onDeploySchedule={handleDeploySchedule}
             onApproveOrder={handleApproveOrder}
             onRejectOrder={handleRejectOrder}
+            onAcceptSubstitution={handleAcceptSubstitution}
+            onRejectSubstitution={handleRejectSubstitution}
             onRevokeGrant={handleRevokeGrant}
           />
         )}

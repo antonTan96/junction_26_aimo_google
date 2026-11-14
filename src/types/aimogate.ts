@@ -42,6 +42,43 @@ export interface CategoryRuleUsageDTO extends CategoryRule {
   days_remaining: number | null;
 }
 
+export interface SubstitutionRule {
+  id: string;
+  tenant_id: string;
+  original_sku: string;
+  original_name?: string;
+  substitute_sku: string;
+  substitute_name?: string;
+  auto_approved: boolean;
+  max_price_increase_pct?: number;
+  created_at: string;
+  created_by?: string;
+}
+
+export interface SubstitutionRequestDTO {
+  request_id: string;
+  order_id?: string;
+  tenant_id: string;
+  status: 'PENDING' | 'ACCEPTED' | 'REJECTED';
+  original_sku: string;
+  original_name: string;
+  requested_packs: number;
+  available_packs: number;
+  unit_contract_price_eur: number;
+  original_total_eur: number;
+  substitute_sku: string;
+  substitute_name: string;
+  substitute_packs: number;
+  substitute_unit_price_eur: number;
+  substitute_total_eur: number;
+  price_difference_eur: number;
+  price_difference_pct: number;
+  reason: string;
+  created_at: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+}
+
 export interface TenantPolicy {
   tenant_id: string;
   tenant_name: string;
@@ -49,6 +86,7 @@ export interface TenantPolicy {
   max_auto_approve_litres: number;
   allowed_categories: string[];
   category_rules?: Record<string, CategoryRule>;
+  substitution_rules?: Record<string, SubstitutionRule>;
   anomaly_sensitivity_pct: number;
   auto_dispute_enabled: boolean;
 }
@@ -92,6 +130,7 @@ export interface OrderDTO {
   offer_comparisons?: PublicOfferDTO[];
   items?: OrderItemDTO[];
   recipe_name?: string | null;
+  substitution_request?: SubstitutionRequestDTO | null;
 }
 
 export type ProcurementRequestType = 'single_item' | 'multi_item' | 'recipe';

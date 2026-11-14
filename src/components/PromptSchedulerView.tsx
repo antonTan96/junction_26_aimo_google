@@ -14,6 +14,7 @@ import {
   Sparkles,
   Filter,
   ArrowRight,
+  ArrowRightLeft,
   Tag,
   Plus,
   Loader2,
@@ -59,6 +60,8 @@ interface PromptSchedulerViewProps {
     budget: number
   ) => void;
   onRejectOrder: (orderId: string) => void;
+  onAcceptSubstitution?: (orderId: string, autoCreateRule: boolean) => void;
+  onRejectSubstitution?: (orderId: string, reason?: string) => void;
   onRevokeGrant: (grantId: string) => void;
 }
 
@@ -140,6 +143,8 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
   onDeploySchedule,
   onApproveOrder,
   onRejectOrder,
+  onAcceptSubstitution,
+  onRejectSubstitution,
   onRevokeGrant,
 }) => {
   const [workflowName, setWorkflowName] = useState('Monday Milk Delivery');
@@ -150,6 +155,7 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
   const [recurrentBudget, setRecurrentBudget] = useState(3000);
   const [showWindowOptions, setShowWindowOptions] = useState(false);
   const [showTraceDetails, setShowTraceDetails] = useState(false);
+  const [rememberSubRules, setRememberSubRules] = useState<Record<string, boolean>>({});
 
   // Catalog Explorer & RAG Search state
   const [catalogSearch, setCatalogSearch] = useState('');
@@ -593,69 +599,202 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
             ) : (
               <div className="space-y-4">
                 <div className="divide-y divide-outline-variant/40">
-                  {pendingOrders.map((ord) => (
-                    <div key={ord.order_id} className="py-4 first:pt-0 last:pb-0 space-y-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-1 min-w-0">
-                          <div className="text-sm font-semibold text-on-surface">
-                            {ord.product_name || ord.sku}
-                          </div>
-                          <div className="text-xs text-on-surface-variant tabular-nums">
-                            {ord.pack_quantity} boxes ({ord.total_litres} L) · Stock held for 15 min
-                          </div>
-                          {ord.violation_reasons && ord.violation_reasons.length > 0 && (
-                            <p className="text-xs text-error">
-                              {ord.violation_reasons
-                                .join(' · ')
-                                .replace(/autonomous limit/gi, 'automatic limit')}
-                            </p>
-                          )}
-                        </div>
-                        <span className="text-base font-semibold text-on-surface tabular-nums shrink-0">
-                          €{ord.total_eur.toFixed(2)}
-                        </span>
-                      </div>
+                  {pendingOrders.map((ord) => {
+                    const subReq = ord.substitution_request;
+                    if (subReq && subReq.status === 'PENDING') {
+                      const remember = Boolean(rememberSubRules[ord.order_id]);
+                      return (
+                        <div key={ord.order_id} className="py-4 first:pt-0 last:pb-0 space-y-3">
+                          <div className="p-3.5 rounded-xl border border-amber-500/30 bg-amber-500/5 space-y-3">
+                            <div className="flex items-center justify-between gap-2 border-b border-amber-500/20 pb-2">
+                              <div className="flex items-center gap-2 text-amber-500 text-xs font-semibold">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                <span>Inventory Shortage — Substitution Acceptance Required</span>
+                              </div>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-500/10 text-amber-400">
+                                {subReq.request_id}
+                              </span>
+                            </div>
 
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onApproveOrder(
-                              ord.order_id,
-                              'ONE_TIME',
-                              approvalWindowDays,
-                              recurrentBudget
-                            )
-                          }
-                          className="flex-1 px-3 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary-fixed transition-colors whitespace-nowrap cursor-pointer"
-                        >
-                          Approve Once
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onApproveOrder(
-                              ord.order_id,
-                              'RECURRENT_WINDOW',
-                              approvalWindowDays,
-                              recurrentBudget
-                            )
-                          }
-                          className="flex-1 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/60 text-on-surface text-xs font-medium hover:bg-surface-container-highest transition-colors whitespace-nowrap cursor-pointer"
-                        >
-                          Approve for {approvalWindowDays} Days
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onRejectOrder(ord.order_id)}
-                          className="px-3 py-2 rounded-lg bg-error-container text-error text-xs font-medium hover:opacity-90 transition-opacity inline-flex items-center gap-1 whitespace-nowrap cursor-pointer"
-                        >
-                          <XCircle className="w-3.5 h-3.5" />
-                          <span>Decline</span>
-                        </button>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                              {/* Unavailable original item */}
+                              <div className="p-2.5 rounded-lg bg-surface-container-high/60 border border-outline-variant/40 space-y-1">
+                                <div className="text-[11px] font-medium text-error flex items-center gap-1">
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  <span>Out of Stock / Shortage</span>
+                                </div>
+                                <div className="font-semibold text-on-surface">
+                                  {subReq.original_name || subReq.original_sku}
+                                </div>
+                                <div className="text-on-surface-variant text-[11px]">
+                                  {subReq.requested_packs} boxes needed ·{' '}
+                                  <span className="text-error font-medium">
+                                    {subReq.available_packs} available in warehouse
+                                  </span>
+                                </div>
+                                <div className="text-on-surface-variant text-[11px]">
+                                  Original total: €{subReq.original_total_eur.toFixed(2)} (€{subReq.unit_contract_price_eur.toFixed(2)}/box)
+                                </div>
+                              </div>
+
+                              {/* Proposed substitute */}
+                              <div className="p-2.5 rounded-lg bg-primary/5 border border-primary/20 space-y-1">
+                                <div className="text-[11px] font-medium text-primary flex items-center gap-1">
+                                  <ArrowRightLeft className="w-3.5 h-3.5" />
+                                  <span>Proposed Replacement</span>
+                                </div>
+                                <div className="font-semibold text-on-surface">
+                                  {subReq.substitute_name || subReq.substitute_sku}
+                                </div>
+                                <div className="text-on-surface-variant text-[11px]">
+                                  {subReq.substitute_packs} boxes · Stock reserved
+                                </div>
+                                <div className="flex items-center justify-between text-[11px]">
+                                  <span className="font-semibold text-on-surface">
+                                    €{subReq.substitute_total_eur.toFixed(2)}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                      subReq.price_difference_eur <= 0
+                                        ? 'bg-emerald-500/15 text-emerald-400'
+                                        : 'bg-amber-500/15 text-amber-400'
+                                    }`}
+                                  >
+                                    {subReq.price_difference_eur >= 0 ? '+' : ''}€{subReq.price_difference_eur.toFixed(2)} (
+                                    {subReq.price_difference_pct > 0 ? '+' : ''}{subReq.price_difference_pct}%)
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <p className="text-[11px] text-on-surface-variant leading-relaxed">
+                              {subReq.reason}
+                            </p>
+
+                            <label className="flex items-start gap-2 text-xs text-on-surface cursor-pointer select-none pt-1">
+                              <input
+                                type="checkbox"
+                                checked={remember}
+                                onChange={(e) =>
+                                  setRememberSubRules((prev) => ({
+                                    ...prev,
+                                    [ord.order_id]: e.target.checked,
+                                  }))
+                                }
+                                className="mt-0.5 rounded border-outline-variant text-primary focus:ring-primary cursor-pointer"
+                              />
+                              <span className="text-[11px] text-on-surface-variant">
+                                <strong className="text-on-surface">
+                                  Remember: always allow this substitution.
+                                </strong>{' '}
+                                Automatically approves this replacement in future inventory shortages without holding for manual sign-off.
+                              </span>
+                            </label>
+
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onAcceptSubstitution) {
+                                    onAcceptSubstitution(ord.order_id, remember);
+                                  } else {
+                                    onApproveOrder(
+                                      ord.order_id,
+                                      'ONE_TIME',
+                                      approvalWindowDays,
+                                      recurrentBudget
+                                    );
+                                  }
+                                }}
+                                className="flex-1 px-3 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary-fixed transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>Accept Substitution</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onRejectSubstitution) {
+                                    onRejectSubstitution(ord.order_id, 'Substitution rejected by buyer');
+                                  } else {
+                                    onRejectOrder(ord.order_id);
+                                  }
+                                }}
+                                className="px-3 py-2 rounded-lg bg-error-container text-error text-xs font-medium hover:opacity-90 transition-opacity flex items-center gap-1 cursor-pointer"
+                              >
+                                <XCircle className="w-3.5 h-3.5" />
+                                <span>Decline</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div key={ord.order_id} className="py-4 first:pt-0 last:pb-0 space-y-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1 min-w-0">
+                            <div className="text-sm font-semibold text-on-surface">
+                              {ord.product_name || ord.sku}
+                            </div>
+                            <div className="text-xs text-on-surface-variant tabular-nums">
+                              {ord.pack_quantity} boxes ({ord.total_litres} L) · Stock held for 15 min
+                            </div>
+                            {ord.violation_reasons && ord.violation_reasons.length > 0 && (
+                              <p className="text-xs text-error">
+                                {ord.violation_reasons
+                                  .join(' · ')
+                                  .replace(/autonomous limit/gi, 'automatic limit')}
+                              </p>
+                            )}
+                          </div>
+                          <span className="text-base font-semibold text-on-surface tabular-nums shrink-0">
+                            €{ord.total_eur.toFixed(2)}
+                          </span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onApproveOrder(
+                                ord.order_id,
+                                'ONE_TIME',
+                                approvalWindowDays,
+                                recurrentBudget
+                              )
+                            }
+                            className="flex-1 px-3 py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold hover:bg-primary-fixed transition-colors whitespace-nowrap cursor-pointer"
+                          >
+                            Approve Once
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onApproveOrder(
+                                ord.order_id,
+                                'RECURRENT_WINDOW',
+                                approvalWindowDays,
+                                recurrentBudget
+                              )
+                            }
+                            className="flex-1 px-3 py-2 rounded-lg bg-surface-container-high border border-outline-variant/60 text-on-surface text-xs font-medium hover:bg-surface-container-highest transition-colors whitespace-nowrap cursor-pointer"
+                          >
+                            Approve for {approvalWindowDays} Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRejectOrder(ord.order_id)}
+                            className="px-3 py-2 rounded-lg bg-error-container text-error text-xs font-medium hover:opacity-90 transition-opacity inline-flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>Decline</span>
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 <div className="pt-2 border-t border-outline-variant/40">

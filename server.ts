@@ -197,6 +197,25 @@ export async function createApp() {
     })
   );
 
+  // --- Inventory Shortage & Substitution Approval Endpoints ---
+  api.post(
+    '/orders/:orderId/substitution/accept',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const order = await store.acceptSubstitution(principal, req.params.orderId, req.body || {});
+      res.json(order);
+    })
+  );
+
+  api.post(
+    '/orders/:orderId/substitution/reject',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const order = await store.rejectSubstitution(principal, req.params.orderId, req.body || {});
+      res.json(order);
+    })
+  );
+
   // --- Policies & Guardrails ---
   api.get(
     '/policies',
@@ -253,6 +272,36 @@ export async function createApp() {
 
   api.patch('/policies/categories/:category', updateCategoryHandler);
   api.put('/policies/categories/:category', updateCategoryHandler);
+
+  // --- Substitution Rules Management ---
+  api.get(
+    '/policies/substitution-rules',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+      res.json(await store.getSubstitutionRules(targetTenant));
+    })
+  );
+
+  api.post(
+    '/policies/substitution-rules',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+      const rule = await store.setSubstitutionRule(principal, targetTenant, req.body || {});
+      res.json(rule);
+    })
+  );
+
+  api.delete(
+    '/policies/substitution-rules/:sku',
+    asyncHandler(async (req, res) => {
+      const principal = resolvePrincipal(req);
+      const targetTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : principal.tenant_id;
+      const ok = await store.deleteSubstitutionRule(principal, targetTenant, req.params.sku);
+      res.json({ success: ok, deleted_sku: req.params.sku });
+    })
+  );
 
   // --- Autonomous Buyer Agent & Scheduled Prompts ---
   api.post(

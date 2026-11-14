@@ -8,6 +8,7 @@ import {
   XCircle,
   ChevronDown,
   ChevronRight,
+  ArrowRightLeft,
 } from 'lucide-react';
 import type {
   AuditLogEntry,
@@ -295,6 +296,23 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {activeOrder.substitution_request && (
+                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5 text-xs space-y-2">
+                  <div className="flex items-center justify-between text-amber-500 font-semibold text-[11px]">
+                    <span className="flex items-center gap-1.5">
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                      <span>Substitution Ingredient ({activeOrder.substitution_request.status})</span>
+                    </span>
+                    <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10">
+                      {activeOrder.substitution_request.request_id}
+                    </span>
+                  </div>
+                  <div className="text-on-surface-variant text-[11px] leading-relaxed">
+                    Original requested item <span className="font-medium text-on-surface">{activeOrder.substitution_request.original_name}</span> had an inventory shortage ({activeOrder.substitution_request.available_packs} available, {activeOrder.substitution_request.requested_packs} needed). Proposing replacement <span className="font-medium text-on-surface">{activeOrder.substitution_request.substitute_name}</span>. Price difference: {activeOrder.substitution_request.price_difference_eur >= 0 ? '+' : ''}€{activeOrder.substitution_request.price_difference_eur.toFixed(2)} ({activeOrder.substitution_request.price_difference_pct > 0 ? '+' : ''}{activeOrder.substitution_request.price_difference_pct}%).
+                  </div>
+                </div>
+              )}
 
               {activeOrder.violation_reasons && activeOrder.violation_reasons.length > 0 && (
                 <div

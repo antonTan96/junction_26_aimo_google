@@ -13,6 +13,8 @@ import type {
   OrderItemDTO,
   Principal,
   QuoteLock,
+  SubstitutionRequestDTO,
+  SubstitutionRule,
   TenantPolicy,
 } from '../types/aimogate.ts';
 
@@ -449,6 +451,64 @@ export class ValioAimoRAGService {
       aiExplanation = `Selected SKU ${selected.product.id} (${selected.product.display_name}) with lowest unit cost €${selected.comparisonPriceEur}/${selected.comparisonUnit}.`;
     }
 
+    // Check for inventory shortage on primary desired candidate
+    const primaryCandidate = candidateContexts[0];
+    const isPrimaryShortage = !primaryCandidate.isAvailable || primaryCandidate.availablePacks < primaryCandidate.packsRequired;
+    let substitutionRequest: SubstitutionRequestDTO | null = null;
+
+    if (isPrimaryShortage) {
+      const subRule = policy.substitution_rules?.[primaryCandidate.product.id];
+
+      if (subRule && subRule.auto_approved) {
+        // Active substitution rule found -> auto-substitute
+        const ruleMatch = candidateContexts.find((c) => c.product.id === subRule.substitute_sku);
+        if (ruleMatch && ruleMatch.isAvailable && ruleMatch.availablePacks >= ruleMatch.packsRequired) {
+          selected = ruleMatch;
+          selectedPacks = ruleMatch.packsRequired;
+          selectedCost = ruleMatch.totalCostEur;
+          aiExplanation = `Inventory shortage for '${primaryCandidate.product.display_name}'. Auto-substituted '${ruleMatch.product.display_name}' under active rule '${subRule.id}'.`;
+        }
+      } else {
+        // No substitution rule created -> Formulate substitution request to accept said substitution
+        const availableAlternatives = candidateContexts.filter(
+          (c) => c.product.id !== primaryCandidate.product.id && c.isAvailable && c.availablePacks >= c.packsRequired
+        );
+        const substituteCandidate = availableAlternatives[0];
+
+        if (substituteCandidate) {
+          selected = substituteCandidate;
+          selectedPacks = substituteCandidate.packsRequired;
+          selectedCost = substituteCandidate.totalCostEur;
+
+          const priceDiffEur = Number((substituteCandidate.totalCostEur - primaryCandidate.totalCostEur).toFixed(2));
+          const priceDiffPct = Number((((substituteCandidate.totalCostEur - primaryCandidate.totalCostEur) / (primaryCandidate.totalCostEur || 1)) * 100).toFixed(1));
+
+          substitutionRequest = {
+            request_id: `SUB-${Date.now().toString().slice(-6)}`,
+            tenant_id: policy.tenant_id,
+            status: 'PENDING',
+            original_sku: primaryCandidate.product.id,
+            original_name: primaryCandidate.product.display_name,
+            requested_packs: primaryCandidate.packsRequired,
+            available_packs: primaryCandidate.availablePacks,
+            unit_contract_price_eur: primaryCandidate.catalogPriceEur,
+            original_total_eur: primaryCandidate.totalCostEur,
+            substitute_sku: substituteCandidate.product.id,
+            substitute_name: substituteCandidate.product.display_name,
+            substitute_packs: substituteCandidate.packsRequired,
+            substitute_unit_price_eur: substituteCandidate.catalogPriceEur,
+            substitute_total_eur: substituteCandidate.totalCostEur,
+            price_difference_eur: priceDiffEur,
+            price_difference_pct: priceDiffPct,
+            reason: `Inventory shortage for '${primaryCandidate.product.display_name}' (${primaryCandidate.availablePacks} available, ${primaryCandidate.packsRequired} requested). No substitution rule configured. Acceptance required.`,
+            created_at: new Date().toISOString(),
+          };
+
+          aiExplanation = `Inventory shortage for '${primaryCandidate.product.display_name}' (${primaryCandidate.availablePacks}/${primaryCandidate.packsRequired} packs). No substitution rule configured. Formulated substitution request ${substitutionRequest.request_id} proposing '${substituteCandidate.product.display_name}' (€${substituteCandidate.totalCostEur.toFixed(2)}).`;
+        }
+      }
+    }
+
     // Step 4: Policy & Guardrail Verification
     const mockQuote: QuoteLock = {
       quote_id: `quote_rag_${Date.now()}`,
@@ -485,9 +545,18 @@ export class ValioAimoRAGService {
       existingOrders,
     });
 
+    if (substitutionRequest) {
+      policyEval.passes = false;
+      policyEval.violations = [
+        `SUBSTITUTION_REQUIRED: Inventory shortage for original item '${substitutionRequest.original_name}'. Substitution approval requested.`,
+      ];
+    }
+
     traces.push({
       step_number: 3,
-      title: nemotronDecision
+      title: substitutionRequest
+        ? 'RAG Step 3: Inventory Shortage & Substitution Request Formulated'
+        : nemotronDecision
         ? 'RAG Step 3: NVIDIA Nemotron-3.5-Super-VL Reasoning (DataCrunch B300)'
         : 'RAG Step 3: Synthesis & Policy Guardrail Evaluation',
       description: `${aiExplanation} Policy evaluation: ${policyEval.passes ? 'PASSED (Auto-Approve)' : `REQUIRES SIGN-OFF (${policyEval.violations.join('; ')})`}.`,
@@ -501,16 +570,19 @@ export class ValioAimoRAGService {
         policy_passes: policyEval.passes,
         violations: policyEval.violations,
         chain_of_thought: chainOfThought,
+        substitution_request: substitutionRequest,
       },
     });
 
-    const isAutoApproved = policyEval.passes;
+    const isAutoApproved = policyEval.passes && !substitutionRequest;
     const finalStatus = isAutoApproved ? 'CONFIRMED' : 'PENDING_APPROVAL';
 
-    const explanation = `${aiExplanation} ` +
-      (isAutoApproved
-        ? `Order (€${selectedCost.toFixed(2)}) is within the €${policy.max_auto_approve_eur} threshold and satisfies category rules. Order AUTO-APPROVED.`
-        : `Order (€${selectedCost.toFixed(2)}) flagged for manager approval: ${policyEval.violations.join('. ')}.`);
+    const explanation = substitutionRequest
+      ? `Inventory shortage for '${substitutionRequest.original_name}'. No substitution rule created. Sent request ${substitutionRequest.request_id} to accept substitution '${substitutionRequest.substitute_name}' (€${substitutionRequest.substitute_total_eur.toFixed(2)}). Order held in PENDING_APPROVAL.`
+      : `${aiExplanation} ` +
+        (isAutoApproved
+          ? `Order (€${selectedCost.toFixed(2)}) is within the €${policy.max_auto_approve_eur} threshold and satisfies category rules. Order AUTO-APPROVED.`
+          : `Order (€${selectedCost.toFixed(2)}) flagged for manager approval: ${policyEval.violations.join('. ')}.`);
 
     const singleOrderItem: OrderItemDTO = {
       sku: selected.product.id,
@@ -522,7 +594,9 @@ export class ValioAimoRAGService {
       delivered_volume: selectedPacks * selected.product.pack_volume_litres,
       unit_price_eur: selected.catalogPriceEur,
       total_price_eur: selectedCost,
-      deduced_from_ingredient: preprocessed.items[0]?.ingredient_name || selected.product.display_name,
+      deduced_from_ingredient: substitutionRequest
+        ? `Substitution proposed for ${substitutionRequest.original_name}`
+        : preprocessed.items[0]?.ingredient_name || selected.product.display_name,
     };
 
     const agentResponse: AgentRunResponse = {
@@ -551,6 +625,7 @@ export class ValioAimoRAGService {
         violation_reasons: isAutoApproved ? null : policyEval.violations,
         created_at: new Date().toISOString(),
         items: [singleOrderItem],
+        substitution_request: substitutionRequest,
         traces,
       },
     };

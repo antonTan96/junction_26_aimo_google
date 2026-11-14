@@ -17,6 +17,8 @@ import type {
   RecurrentApprovalGrant,
   ScheduledPrompt,
   StockSummaryItem,
+  SubstitutionRequestDTO,
+  SubstitutionRule,
   TenantPolicy,
   TokenBundle,
   WarehouseStock,
@@ -371,7 +373,7 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
     .replace(/\bleivontaan\b/gi, '')
     .replace(/\b(?:varten|meille)\b/gi, '')
     // Strip action and meta prefixes:
-    .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme|tilataan)\s+/gi, '')
+    .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|procure|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme|tilataan)\s+/gi, '')
     .replace(/\bingredients\s+(?:for\s+)?/gi, '')
     .replace(/^urgent\s+delivery\s+of\s+/gi, '')
     .replace(/\burgent(?:ly)?\b/gi, '')
@@ -1235,6 +1237,7 @@ export class AimoGateStore {
       offer_comparisons?: PublicOfferDTO[];
       items?: OrderItemDTO[];
       recipe_name?: string | null;
+      substitution_request?: SubstitutionRequestDTO | null;
     },
     now: Date = new Date()
   ): OrderDTO {
@@ -1290,9 +1293,14 @@ export class AimoGateStore {
     let approvalType: OrderDTO['approval_type'] = 'PENDING';
     let recurrentGrantId: string | null = null;
     let approvedBy: string | null = null;
-    let action = 'POLICY_HELD';
+    let action = req.substitution_request ? 'SUBSTITUTION_HELD' : 'POLICY_HELD';
 
-    if (passes) {
+    const effectivePasses = req.substitution_request ? false : passes;
+    const effectiveViolations = req.substitution_request
+      ? ['SUBSTITUTION_REQUIRED: Inventory shortage for original item. Substitution approval requested.']
+      : violations;
+
+    if (effectivePasses) {
       orderStatus = 'CONFIRMED';
       quote.status = 'CONSUMED';
       const stockRec = this.stock.get(quote.sku);
@@ -1318,6 +1326,10 @@ export class AimoGateStore {
       }
     }
 
+    if (req.substitution_request) {
+      req.substitution_request.order_id = orderId;
+    }
+
     const order: OrderDTO = {
       order_id: orderId,
       quote_id: quote.quote_id,
@@ -1326,7 +1338,7 @@ export class AimoGateStore {
       po_reference: req.po_reference,
       status: orderStatus,
       total_eur: quote.locked_total_eur,
-      violation_reasons: passes ? null : violations,
+      violation_reasons: effectivePasses ? null : effectiveViolations,
       approved_by: approvedBy,
       approval_type: approvalType,
       recurrent_grant_id: recurrentGrantId,
@@ -1341,6 +1353,7 @@ export class AimoGateStore {
       offer_comparisons: req.offer_comparisons,
       items: req.items,
       recipe_name: req.recipe_name ?? null,
+      substitution_request: req.substitution_request ?? null,
     };
 
     this.orders.set(orderId, order);
@@ -1374,6 +1387,7 @@ export class AimoGateStore {
       frequency?: 'DAILY' | 'WEEKLY' | 'MONTHLY';
       recurrent_budget_eur?: number;
       notes?: string;
+      auto_create_rule?: boolean;
     },
     now: Date = new Date()
   ): OrderDTO {
@@ -1384,6 +1398,12 @@ export class AimoGateStore {
     if (!order || (principal.principal_type !== 'admin' && order.tenant_id !== principal.tenant_id)) {
       throw new GatewayError(404, `Order '${orderId}' not found.`);
     }
+
+    // If order has a pending substitution request, approve delegates to acceptSubstitution
+    if (order.substitution_request && order.substitution_request.status === 'PENDING') {
+      return this.acceptSubstitution(principal, orderId, { auto_create_rule: payload?.auto_create_rule }, now);
+    }
+
     if (order.status !== 'PENDING_APPROVAL') {
       throw new GatewayError(400, `Order '${orderId}' cannot be approved: current status is ${order.status}.`);
     }
@@ -1499,6 +1519,247 @@ export class AimoGateStore {
     });
 
     return order;
+  }
+
+  acceptSubstitution(
+    principal: Principal,
+    orderId: string,
+    payload?: { auto_create_rule?: boolean },
+    now: Date = new Date()
+  ): OrderDTO {
+    this.requirePrincipal(principal, ['human', 'admin'], ['orders:approve']);
+
+    const order = this.orders.get(orderId);
+    if (!order || (principal.principal_type !== 'admin' && order.tenant_id !== principal.tenant_id)) {
+      throw new GatewayError(404, `Order '${orderId}' not found.`);
+    }
+
+    if (!order.substitution_request || order.substitution_request.status !== 'PENDING') {
+      throw new GatewayError(400, `Order '${orderId}' does not have a pending substitution request.`);
+    }
+
+    const subReq = order.substitution_request;
+    subReq.status = 'ACCEPTED';
+    subReq.decided_at = now.toISOString();
+    subReq.decided_by = `${principal.principal_id} (${principal.principal_type})`;
+
+    const quote = this.quoteLocks.get(order.quote_id);
+    if (quote) {
+      quote.status = 'CONSUMED';
+      const stockRec = this.stock.get(quote.sku);
+      if (stockRec) {
+        stockRec.reserved_packs = Math.max(0, stockRec.reserved_packs - quote.pack_quantity);
+      }
+    }
+
+    order.status = 'CONFIRMED';
+    order.approval_type = 'ONE_TIME';
+    order.approved_by = `${principal.principal_id} [Substitution Accepted]`;
+    order.violation_reasons = null;
+
+    if (payload?.auto_create_rule) {
+      const policy = this.policies.get(order.tenant_id);
+      if (policy) {
+        if (!policy.substitution_rules) policy.substitution_rules = {};
+        const ruleId = `SR-${Date.now()}`;
+        policy.substitution_rules[subReq.original_sku] = {
+          id: ruleId,
+          tenant_id: order.tenant_id,
+          original_sku: subReq.original_sku,
+          original_name: subReq.original_name,
+          substitute_sku: subReq.substitute_sku,
+          substitute_name: subReq.substitute_name,
+          auto_approved: true,
+          max_price_increase_pct: 25,
+          created_at: now.toISOString(),
+          created_by: principal.principal_id,
+        };
+        this.addAuditLog({
+          tenant_id: order.tenant_id,
+          actor_type: principal.principal_type,
+          actor_id: principal.principal_id,
+          action: 'SUBSTITUTION_RULE_CREATED',
+          payload_summary: {
+            rule_id: ruleId,
+            original_sku: subReq.original_sku,
+            substitute_sku: subReq.substitute_sku,
+          },
+        });
+      }
+    }
+
+    this.addAuditLog({
+      tenant_id: order.tenant_id,
+      actor_type: principal.principal_type,
+      actor_id: principal.principal_id,
+      action: 'SUBSTITUTION_ACCEPTED',
+      payload_summary: {
+        order_id: orderId,
+        request_id: subReq.request_id,
+        original_sku: subReq.original_sku,
+        substitute_sku: subReq.substitute_sku,
+        auto_create_rule: Boolean(payload?.auto_create_rule),
+      },
+    });
+
+    return order;
+  }
+
+  rejectSubstitution(
+    principal: Principal,
+    orderId: string,
+    payload?: { reason?: string },
+    now: Date = new Date()
+  ): OrderDTO {
+    this.requirePrincipal(principal, ['human', 'admin'], ['orders:reject']);
+
+    const order = this.orders.get(orderId);
+    if (!order || (principal.principal_type !== 'admin' && order.tenant_id !== principal.tenant_id)) {
+      throw new GatewayError(404, `Order '${orderId}' not found.`);
+    }
+
+    if (!order.substitution_request || order.substitution_request.status !== 'PENDING') {
+      throw new GatewayError(400, `Order '${orderId}' does not have a pending substitution request.`);
+    }
+
+    const subReq = order.substitution_request;
+    subReq.status = 'REJECTED';
+    subReq.decided_at = now.toISOString();
+    subReq.decided_by = `${principal.principal_id} (${principal.principal_type})`;
+
+    const quote = this.quoteLocks.get(order.quote_id);
+    if (quote) {
+      quote.status = 'RELEASED';
+      const stockRec = this.stock.get(quote.sku);
+      if (stockRec) {
+        stockRec.available_packs += quote.pack_quantity;
+        stockRec.reserved_packs = Math.max(0, stockRec.reserved_packs - quote.pack_quantity);
+      }
+    }
+
+    order.status = 'REJECTED';
+    order.approved_by = `REJECTED by ${principal.principal_id} [Substitution Rejected]`;
+    order.violation_reasons = [payload?.reason || 'Substitution rejected by buyer. Order cancelled.'];
+
+    this.addAuditLog({
+      tenant_id: order.tenant_id,
+      actor_type: principal.principal_type,
+      actor_id: principal.principal_id,
+      action: 'SUBSTITUTION_REJECTED',
+      payload_summary: {
+        order_id: orderId,
+        request_id: subReq.request_id,
+        reason: payload?.reason,
+      },
+    });
+
+    return order;
+  }
+
+  findOptimalSubstitution(
+    principal: Principal,
+    originalSku: string,
+    requestedPacks: number,
+    deliverBy: string
+  ): { substituteOffer: PublicOfferDTO; substitutePacks: number } | null {
+    const origProduct = this.products.get(originalSku);
+    if (!origProduct) return null;
+
+    const tenantId = principal.tenant_id;
+    const origUnitPrice = this.contractPrices.get(`${tenantId}::${originalSku}`) ?? origProduct.internal_cost_eur * 1.15;
+    const origPackVol = origProduct.pack_volume_litres > 0 ? origProduct.pack_volume_litres : 1.0;
+    const requiredTotalLitres = requestedPacks * origPackVol;
+    const origPricePerLitre = origUnitPrice / origPackVol;
+
+    // Search offers in same category with compatible tags
+    const offers = this.searchOffers(principal, {
+      query: origProduct.category,
+      attributes: origProduct.dietary_tags,
+      required_volume_litres: requiredTotalLitres,
+      deliver_by: deliverBy,
+    });
+
+    const candidates = offers.filter((o) => {
+      if (o.sku === originalSku) return false;
+      const stock = this.stock.get(o.sku);
+      if (!stock || stock.available_packs <= 0) return false;
+      const packVol = o.pack_volume_litres > 0 ? o.pack_volume_litres : 1.0;
+      const packsNeeded = Math.ceil(requiredTotalLitres / packVol);
+      return stock.available_packs >= packsNeeded;
+    });
+
+    if (candidates.length === 0) return null;
+
+    // Rank candidates by price delta
+    candidates.sort((a, b) => {
+      const diffA = Math.abs(a.price_per_litre_eur - origPricePerLitre);
+      const diffB = Math.abs(b.price_per_litre_eur - origPricePerLitre);
+      return diffA - diffB;
+    });
+
+    const best = candidates[0];
+    const bestPackVol = best.pack_volume_litres > 0 ? best.pack_volume_litres : 1.0;
+    const substitutePacks = Math.ceil(requiredTotalLitres / bestPackVol);
+
+    return { substituteOffer: best, substitutePacks };
+  }
+
+  getSubstitutionRules(tenantId: string): SubstitutionRule[] {
+    const policy = this.policies.get(tenantId);
+    if (!policy || !policy.substitution_rules) return [];
+    return Object.values(policy.substitution_rules);
+  }
+
+  setSubstitutionRule(
+    principal: Principal,
+    tenantId: string,
+    rule: Omit<SubstitutionRule, 'id' | 'created_at'>
+  ): SubstitutionRule {
+    this.requirePrincipal(principal, ['human', 'admin'], ['policies:write']);
+    const policy = this.policies.get(tenantId);
+    if (!policy) {
+      throw new GatewayError(404, `Tenant policy '${tenantId}' not found.`);
+    }
+    if (!policy.substitution_rules) policy.substitution_rules = {};
+    const ruleId = `SR-${Date.now()}`;
+    const newRule: SubstitutionRule = {
+      id: ruleId,
+      tenant_id: tenantId,
+      original_sku: rule.original_sku,
+      original_name: rule.original_name,
+      substitute_sku: rule.substitute_sku,
+      substitute_name: rule.substitute_name,
+      auto_approved: rule.auto_approved ?? true,
+      max_price_increase_pct: rule.max_price_increase_pct ?? 20,
+      created_at: new Date().toISOString(),
+      created_by: principal.principal_id,
+    };
+    policy.substitution_rules[rule.original_sku] = newRule;
+    this.addAuditLog({
+      tenant_id: tenantId,
+      actor_type: principal.principal_type,
+      actor_id: principal.principal_id,
+      action: 'SUBSTITUTION_RULE_UPDATED',
+      payload_summary: { rule_id: ruleId, original_sku: rule.original_sku, substitute_sku: rule.substitute_sku },
+    });
+    return newRule;
+  }
+
+  deleteSubstitutionRule(principal: Principal, tenantId: string, originalSku: string): boolean {
+    this.requirePrincipal(principal, ['human', 'admin'], ['policies:write']);
+    const policy = this.policies.get(tenantId);
+    if (!policy || !policy.substitution_rules || !policy.substitution_rules[originalSku]) {
+      return false;
+    }
+    delete policy.substitution_rules[originalSku];
+    this.addAuditLog({
+      tenant_id: tenantId,
+      actor_type: principal.principal_type,
+      actor_id: principal.principal_id,
+      action: 'SUBSTITUTION_RULE_DELETED',
+      payload_summary: { original_sku: originalSku },
+    });
+    return true;
   }
 
   updatePolicy(
@@ -1806,6 +2067,8 @@ export class AimoGateStore {
       const lockedQuotes: QuoteLock[] = [];
       let totalOrderCost = 0;
       let totalOrderLitres = 0;
+      let compositeSubRequest: SubstitutionRequestDTO | null = null;
+      const policy = this.policies.get(tenantId)!;
 
       for (const item of preprocessed.items) {
         let offers = this.searchOffers(principal, {
@@ -1831,38 +2094,115 @@ export class AimoGateStore {
           });
         }
 
-        const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);
-        const bestOffer = inStockOffers[0] || offers[0];
+        if (offers.length === 0) continue;
 
-        if (bestOffer) {
-          const packVol = bestOffer.pack_volume_litres > 0 ? bestOffer.pack_volume_litres : 1.0;
-          const packsToLock = Math.max(1, Math.min(Math.ceil(item.quantity / packVol), Math.max(1, bestOffer.available_packs)));
+        const desiredOffer = offers[0];
+        const desiredVol = desiredOffer.pack_volume_litres > 0 ? desiredOffer.pack_volume_litres : 1.0;
+        const packsNeeded = Math.max(1, Math.ceil(item.quantity / desiredVol));
+        const desiredStock = this.stock.get(desiredOffer.sku);
+        const isShortage = !desiredStock || desiredStock.available_packs < packsNeeded;
 
-          const quote = this.lockQuote(principal, {
-            sku: bestOffer.sku,
-            pack_quantity: packsToLock,
-            deliver_by: preprocessed.deliver_by,
-          });
+        let chosenOffer = desiredOffer;
+        let chosenPacks = packsNeeded;
+        let deducedDesc = `${item.ingredient_name} (${item.quantity} ${item.unit})`;
 
-          lockedQuotes.push(quote);
-          const lineCost = quote.locked_total_eur;
-          const deliveredVol = packsToLock * packVol;
-          totalOrderCost += lineCost;
-          totalOrderLitres += deliveredVol;
+        if (isShortage) {
+          const subRule = policy.substitution_rules?.[desiredOffer.sku];
+          if (subRule && subRule.auto_approved) {
+            // Standing substitution rule found!
+            const subOffer =
+              offers.find((o) => o.sku === subRule.substitute_sku) ||
+              this.searchOffers(principal, {
+                query: subRule.substitute_sku,
+                deliver_by: preprocessed.deliver_by,
+              })[0];
+            if (subOffer && subOffer.is_stock_available && subOffer.available_packs > 0) {
+              chosenOffer = subOffer;
+              const subVol = subOffer.pack_volume_litres > 0 ? subOffer.pack_volume_litres : 1.0;
+              chosenPacks = Math.min(Math.max(1, Math.ceil(item.quantity / subVol)), subOffer.available_packs);
+              deducedDesc = `${item.ingredient_name} (Auto-substituted with ${subOffer.name})`;
+            }
+          } else {
+            // No rule created -> formulate substitution request for buyer sign-off
+            const optimalSub = this.findOptimalSubstitution(
+              principal,
+              desiredOffer.sku,
+              packsNeeded,
+              preprocessed.deliver_by
+            );
+            if (optimalSub) {
+              chosenOffer = optimalSub.substituteOffer;
+              chosenPacks = optimalSub.substitutePacks;
+              deducedDesc = `${item.ingredient_name} (Substitution proposed: ${optimalSub.substituteOffer.name})`;
 
-          orderItems.push({
-            sku: bestOffer.sku,
-            product_name: bestOffer.name,
-            category: bestOffer.category,
-            dietary_tags: bestOffer.dietary_tags,
-            pack_format: bestOffer.pack_format,
-            pack_quantity: packsToLock,
-            delivered_volume: deliveredVol,
-            unit_price_eur: Number((lineCost / packsToLock).toFixed(2)),
-            total_price_eur: lineCost,
-            deduced_from_ingredient: `${item.ingredient_name} (${item.quantity} ${item.unit})`,
-          });
+              if (!compositeSubRequest) {
+                const origTotalEur = Number((packsNeeded * desiredOffer.unit_contract_price_eur).toFixed(2));
+                const subTotalEur = Number((chosenPacks * optimalSub.substituteOffer.unit_contract_price_eur).toFixed(2));
+                const diffEur = Number((subTotalEur - origTotalEur).toFixed(2));
+                const diffPct = Number((((subTotalEur - origTotalEur) / (origTotalEur || 1)) * 100).toFixed(1));
+
+                compositeSubRequest = {
+                  request_id: `SUB-${this.nextHex('REQ')}`,
+                  order_id: '',
+                  tenant_id: tenantId,
+                  status: 'PENDING',
+                  original_sku: desiredOffer.sku,
+                  original_name: desiredOffer.name,
+                  requested_packs: packsNeeded,
+                  available_packs: desiredStock?.available_packs ?? 0,
+                  unit_contract_price_eur: desiredOffer.unit_contract_price_eur,
+                  original_total_eur: origTotalEur,
+                  substitute_sku: optimalSub.substituteOffer.sku,
+                  substitute_name: optimalSub.substituteOffer.name,
+                  substitute_packs: chosenPacks,
+                  substitute_unit_price_eur: optimalSub.substituteOffer.unit_contract_price_eur,
+                  substitute_total_eur: subTotalEur,
+                  price_difference_eur: diffEur,
+                  price_difference_pct: diffPct,
+                  reason: `Inventory shortage for '${desiredOffer.name}' (${desiredStock?.available_packs ?? 0} available, ${packsNeeded} requested). No substitution rule configured. Acceptance required.`,
+                  created_at: new Date().toISOString(),
+                };
+              }
+            } else {
+              const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);
+              if (inStockOffers[0]) {
+                chosenOffer = inStockOffers[0];
+                const vol = chosenOffer.pack_volume_litres > 0 ? chosenOffer.pack_volume_litres : 1.0;
+                chosenPacks = Math.min(Math.max(1, Math.ceil(item.quantity / vol)), chosenOffer.available_packs);
+              }
+            }
+          }
+        } else {
+          const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);
+          chosenOffer = inStockOffers[0] || offers[0];
+          const packVol = chosenOffer.pack_volume_litres > 0 ? chosenOffer.pack_volume_litres : 1.0;
+          chosenPacks = Math.max(1, Math.min(Math.ceil(item.quantity / packVol), Math.max(1, chosenOffer.available_packs)));
         }
+
+        const quote = this.lockQuote(principal, {
+          sku: chosenOffer.sku,
+          pack_quantity: chosenPacks,
+          deliver_by: preprocessed.deliver_by,
+        });
+
+        lockedQuotes.push(quote);
+        const lineCost = quote.locked_total_eur;
+        const deliveredVol = chosenPacks * (chosenOffer.pack_volume_litres || 1.0);
+        totalOrderCost += lineCost;
+        totalOrderLitres += deliveredVol;
+
+        orderItems.push({
+          sku: chosenOffer.sku,
+          product_name: chosenOffer.name,
+          category: chosenOffer.category,
+          dietary_tags: chosenOffer.dietary_tags,
+          pack_format: chosenOffer.pack_format,
+          pack_quantity: chosenPacks,
+          delivered_volume: deliveredVol,
+          unit_price_eur: Number((lineCost / chosenPacks).toFixed(2)),
+          total_price_eur: lineCost,
+          deduced_from_ingredient: deducedDesc,
+        });
       }
 
       totalOrderCost = Number(totalOrderCost.toFixed(2));
@@ -1884,6 +2224,7 @@ export class AimoGateStore {
         po_reference: poRef,
         items: orderItems,
         recipe_name: isRecipe ? recipeTitle : null,
+        substitution_request: compositeSubRequest,
       });
 
       // Update composite total cost and litres
@@ -1892,8 +2233,23 @@ export class AimoGateStore {
       order.items = orderItems;
       order.recipe_name = isRecipe ? recipeTitle : null;
 
+      if (compositeSubRequest) {
+        this.addAuditLog({
+          tenant_id: tenantId,
+          actor_type: principal.principal_type,
+          actor_id: principal.principal_id,
+          action: 'SUBSTITUTION_REQUESTED',
+          payload_summary: {
+            order_id: order.order_id,
+            request_id: compositeSubRequest.request_id,
+            original_sku: compositeSubRequest.original_sku,
+            substitute_sku: compositeSubRequest.substitute_sku,
+            price_difference_eur: compositeSubRequest.price_difference_eur,
+          },
+        });
+      }
+
       // Evaluate composite policy
-      const policy = this.policies.get(tenantId)!;
       if (totalOrderCost > policy.max_auto_approve_eur && order.status === 'CONFIRMED') {
         order.status = 'PENDING_APPROVAL';
         order.approval_type = 'PENDING';
@@ -1906,6 +2262,8 @@ export class AimoGateStore {
       const passes = order.status === 'CONFIRMED';
       const summary = passes
         ? `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) AUTO-APPROVED by AimoGate.`
+        : compositeSubRequest
+        ? `Order ${order.order_id} for ${recipeTitle}: Inventory shortage for '${compositeSubRequest.original_name}'. Sent request ${compositeSubRequest.request_id} to accept substitution '${compositeSubRequest.substitute_name}'. Order held in PENDING_APPROVAL.`
         : `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) HELD by Policy Firewall: ${(order.violation_reasons || []).join('; ')}.`;
 
       traces.push({
@@ -1976,6 +2334,201 @@ export class AimoGateStore {
         summary_message: 'No matching products found matching criteria.',
         preprocessed_prompt: preprocessed,
       };
+    }
+
+    const policy = this.policies.get(tenantId)!;
+    const primaryDesiredOffer = offers[0];
+    const primaryStock = this.stock.get(primaryDesiredOffer.sku);
+    const primaryPacksRequired = primaryDesiredOffer.packs_required ?? 1;
+    const isInventoryShortage = !primaryStock || primaryStock.available_packs < primaryPacksRequired;
+
+    if (isInventoryShortage) {
+      const subRule = policy.substitution_rules?.[primaryDesiredOffer.sku];
+
+      if (subRule && subRule.auto_approved) {
+        // Pre-approved substitution rule exists! Auto-substitute
+        const substituteOffer = offers.find((o) => o.sku === subRule.substitute_sku) ||
+          this.searchOffers(principal, {
+            query: subRule.substitute_sku,
+            deliver_by: parsed.deliver_by,
+          })[0];
+
+        if (substituteOffer && substituteOffer.is_stock_available && substituteOffer.available_packs > 0) {
+          traces.push({
+            step_number: 3,
+            title: 'Autonomous Stock Substitution (Pre-Approved Rule)',
+            description: `Inventory shortage for '${primaryDesiredOffer.name}' (${primaryStock?.available_packs ?? 0}/${primaryPacksRequired} packs). Applied pre-approved substitution rule '${subRule.id}' to automatically substitute with '${subRule.substitute_name || subRule.substitute_sku}'.`,
+            action_type: 'policy_decision',
+            latency_ms: 6,
+            tool_output: subRule,
+          });
+
+          const subPackVol = substituteOffer.pack_volume_litres > 0 ? substituteOffer.pack_volume_litres : 1.0;
+          const origTotalLitres = primaryPacksRequired * (primaryDesiredOffer.pack_volume_litres > 0 ? primaryDesiredOffer.pack_volume_litres : 1.0);
+          const subPacksToLock = Math.min(Math.ceil(origTotalLitres / subPackVol), substituteOffer.available_packs);
+
+          const quote = this.lockQuote(principal, {
+            sku: substituteOffer.sku,
+            pack_quantity: subPacksToLock,
+            deliver_by: parsed.deliver_by,
+          });
+
+          const poRef = req.po_reference || this.nextHex('PO');
+          const singleItem: OrderItemDTO = {
+            sku: substituteOffer.sku,
+            product_name: substituteOffer.name,
+            category: substituteOffer.category,
+            dietary_tags: substituteOffer.dietary_tags,
+            pack_format: substituteOffer.pack_format,
+            pack_quantity: subPacksToLock,
+            delivered_volume: subPacksToLock * subPackVol,
+            unit_price_eur: Number((quote.locked_total_eur / subPacksToLock).toFixed(2)),
+            total_price_eur: quote.locked_total_eur,
+            deduced_from_ingredient: `${primaryDesiredOffer.name} (Substituted: ${subRule.substitute_name || subRule.substitute_sku})`,
+          };
+
+          const order = this.commitOrder(principal, {
+            quote_id: quote.quote_id,
+            po_reference: poRef,
+            offer_comparisons: offers,
+            items: [singleItem],
+          });
+
+          const summary = `Auto-substituted '${primaryDesiredOffer.name}' with '${substituteOffer.name}' under standing rule. Order ${order.status}.`;
+          traces.push({
+            step_number: 4,
+            title: 'Final Governance Decision',
+            description: summary,
+            action_type: 'policy_decision',
+            latency_ms: 5,
+            tool_output: { order_id: order.order_id, status: order.status },
+          });
+
+          order.traces = [...traces];
+
+          return {
+            success: true,
+            mode_used: mode,
+            execution_time_ms: Math.max(24, Date.now() - t0 + 35),
+            traces,
+            final_status: order.status,
+            order,
+            summary_message: summary,
+            preprocessed_prompt: preprocessed,
+          };
+        }
+      }
+
+      // No rule is created for substitution ingredients -> Send a request to accept said substitution!
+      const optimalSub = this.findOptimalSubstitution(principal, primaryDesiredOffer.sku, primaryPacksRequired, parsed.deliver_by);
+
+      if (optimalSub) {
+        const { substituteOffer, substitutePacks } = optimalSub;
+        const substituteQuote = this.lockQuote(principal, {
+          sku: substituteOffer.sku,
+          pack_quantity: substitutePacks,
+          deliver_by: parsed.deliver_by,
+        });
+
+        const originalTotalEur = Number((primaryPacksRequired * primaryDesiredOffer.unit_contract_price_eur).toFixed(2));
+        const priceDiffEur = Number((substituteQuote.locked_total_eur - originalTotalEur).toFixed(2));
+        const priceDiffPct = Number((((substituteQuote.locked_total_eur - originalTotalEur) / (originalTotalEur || 1)) * 100).toFixed(1));
+
+        const subRequest: SubstitutionRequestDTO = {
+          request_id: `SUB-${this.nextHex('REQ')}`,
+          order_id: '',
+          tenant_id: tenantId,
+          status: 'PENDING',
+          original_sku: primaryDesiredOffer.sku,
+          original_name: primaryDesiredOffer.name,
+          requested_packs: primaryPacksRequired,
+          available_packs: primaryStock?.available_packs ?? 0,
+          unit_contract_price_eur: primaryDesiredOffer.unit_contract_price_eur,
+          original_total_eur: originalTotalEur,
+          substitute_sku: substituteOffer.sku,
+          substitute_name: substituteOffer.name,
+          substitute_packs: substitutePacks,
+          substitute_unit_price_eur: substituteOffer.unit_contract_price_eur,
+          substitute_total_eur: substituteQuote.locked_total_eur,
+          price_difference_eur: priceDiffEur,
+          price_difference_pct: priceDiffPct,
+          reason: `Inventory shortage for '${primaryDesiredOffer.name}' (${primaryStock?.available_packs ?? 0} available, ${primaryPacksRequired} requested). No substitution rule configured. Acceptance required.`,
+          created_at: new Date().toISOString(),
+        };
+
+        traces.push({
+          step_number: 3,
+          title: 'Inventory Shortage: Substitution Request Formulated',
+          description: `Inventory shortage detected for '${primaryDesiredOffer.name}' (${primaryStock?.available_packs ?? 0}/${primaryPacksRequired} packs). No pre-approved substitution rule found. Formulated substitution request ${subRequest.request_id} proposing '${substituteOffer.name}' (€${substituteQuote.locked_total_eur.toFixed(2)}, ${priceDiffPct > 0 ? '+' : ''}${priceDiffPct}%) for buyer sign-off.`,
+          action_type: 'policy_decision',
+          latency_ms: 8,
+          tool_output: subRequest,
+        });
+
+        const poRef = req.po_reference || this.nextHex('PO');
+        const singleItem: OrderItemDTO = {
+          sku: substituteOffer.sku,
+          product_name: substituteOffer.name,
+          category: substituteOffer.category,
+          dietary_tags: substituteOffer.dietary_tags,
+          pack_format: substituteOffer.pack_format,
+          pack_quantity: substitutePacks,
+          delivered_volume: substitutePacks * (substituteOffer.pack_volume_litres || 1.0),
+          unit_price_eur: substituteOffer.unit_contract_price_eur,
+          total_price_eur: substituteQuote.locked_total_eur,
+          deduced_from_ingredient: `Substitution proposed for ${primaryDesiredOffer.name}`,
+        };
+
+        const order = this.commitOrder(principal, {
+          quote_id: substituteQuote.quote_id,
+          po_reference: poRef,
+          offer_comparisons: offers,
+          items: [singleItem],
+          substitution_request: subRequest,
+        });
+
+        this.addAuditLog({
+          tenant_id: tenantId,
+          actor_type: principal.principal_type,
+          actor_id: principal.principal_id,
+          action: 'SUBSTITUTION_REQUESTED',
+          payload_summary: {
+            order_id: order.order_id,
+            request_id: subRequest.request_id,
+            original_sku: primaryDesiredOffer.sku,
+            substitute_sku: substituteOffer.sku,
+            price_difference_eur: priceDiffEur,
+          },
+        });
+
+        const summary = `Inventory shortage for '${primaryDesiredOffer.name}' (${primaryStock?.available_packs ?? 0} available, ${primaryPacksRequired} requested). No substitution rule configured. Sent request ${subRequest.request_id} to accept substitution '${substituteOffer.name}' (€${substituteQuote.locked_total_eur.toFixed(2)}). Order held in PENDING_APPROVAL.`;
+
+        traces.push({
+          step_number: 4,
+          title: 'Final Governance Decision',
+          description: summary,
+          action_type: 'policy_decision',
+          latency_ms: 6,
+          tool_output: {
+            order_id: order.order_id,
+            status: order.status,
+            violations: order.violation_reasons,
+          },
+        });
+
+        order.traces = [...traces];
+
+        return {
+          success: true,
+          mode_used: mode,
+          execution_time_ms: Math.max(28, Date.now() - t0 + 35),
+          traces,
+          final_status: 'PENDING_APPROVAL',
+          order,
+          summary_message: summary,
+          preprocessed_prompt: preprocessed,
+        };
+      }
     }
 
     const inStockOffers = offers.filter((o) => o.is_stock_available && o.available_packs > 0);

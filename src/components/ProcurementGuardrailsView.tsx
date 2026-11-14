@@ -967,6 +967,12 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                   {guardrails?.active_grants_count ?? 0} active
                 </span>
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-on-surface-variant">Shortage substitution rules</span>
+                <span className="font-semibold text-on-surface">
+                  {policy.substitution_rules ? Object.keys(policy.substitution_rules).length : 0} configured
+                </span>
+              </div>
             </div>
             <div className="pt-2 border-t border-outline-variant/40 flex flex-col gap-2">
               <button

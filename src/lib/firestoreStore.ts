@@ -22,6 +22,7 @@ import type {
   RecurrentApprovalGrant,
   ScheduledPrompt,
   StockSummaryItem,
+  SubstitutionRule,
   TenantPolicy,
   TokenBundle,
   WarehouseStock,
@@ -396,6 +397,58 @@ export class PersistentAimoGateStore {
       const order = this.engine.rejectOrder(principal, orderId);
       await this.persistCurrentState();
       return order;
+    });
+  }
+
+  async acceptSubstitution(
+    principal: Principal,
+    orderId: string,
+    payload?: { auto_create_rule?: boolean }
+  ): Promise<OrderDTO> {
+    return this.enqueue(async () => {
+      const order = this.engine.acceptSubstitution(principal, orderId, payload);
+      await this.persistCurrentState();
+      return order;
+    });
+  }
+
+  async rejectSubstitution(
+    principal: Principal,
+    orderId: string,
+    payload?: { reason?: string }
+  ): Promise<OrderDTO> {
+    return this.enqueue(async () => {
+      const order = this.engine.rejectSubstitution(principal, orderId, payload);
+      await this.persistCurrentState();
+      return order;
+    });
+  }
+
+  async getSubstitutionRules(tenantId: string): Promise<SubstitutionRule[]> {
+    return this.engine.getSubstitutionRules(tenantId);
+  }
+
+  async setSubstitutionRule(
+    principal: Principal,
+    tenantId: string,
+    rule: Omit<SubstitutionRule, 'id' | 'created_at'>
+  ): Promise<SubstitutionRule> {
+    return this.enqueue(async () => {
+      const newRule = this.engine.setSubstitutionRule(principal, tenantId, rule);
+      await this.persistCurrentState();
+      return newRule;
+    });
+  }
+
+  async deleteSubstitutionRule(
+    principal: Principal,
+    tenantId: string,
+    originalSku: string
+  ): Promise<boolean> {
+    return this.enqueue(async () => {
+      const deleted = this.engine.deleteSubstitutionRule(principal, tenantId, originalSku);
+      await this.persistCurrentState();
+      return deleted;
     });
   }
 
