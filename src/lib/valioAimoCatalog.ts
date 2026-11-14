@@ -1,25 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PublicOfferDTO } from '../types/aimogate.ts';
+import type { CatalogProduct, PublicOfferDTO } from '../types/aimogate.ts';
 
-export interface CatalogProduct {
-  id: string;
-  gtin: string;
-  name_fi: string;
-  name_en: string;
-  name_sv: string;
-  display_name: string;
-  vendor_name: string;
-  brand: string;
-  category: string; // 'dairy' | 'plant-based' | 'bakery' | 'beverages' | 'cleaning' | 'meat' | 'alcohol' | 'general'
-  dietary_tags: string[];
-  pack_format: string;
-  pack_volume_litres: number;
-  temperature_condition: number;
-  search_corpus: string;
-  is_active: boolean;
-  base_price_eur?: number;
-}
+export type { CatalogProduct };
 
 const UPSTREAM_API_BASE = process.env.VALIO_API_BASE_URL || 'https://junction26.valioaimo.fi';
 const UPSTREAM_API_KEY =

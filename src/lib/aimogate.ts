@@ -1,5 +1,6 @@
-import type {
-  AgentRunResponse,
+import {
+  DEFAULT_TENANT_ID,
+  type AgentRunResponse,
   AgentStepTrace,
   AuditLogEntry,
   CategoryRule,
@@ -41,7 +42,7 @@ export const SYSTEM_CATEGORIES = [
   'alcohol',
 ] as const;
 
-export const DEFAULT_TENANT_ID = 'hotel_nordic_group';
+export { DEFAULT_TENANT_ID };
 
 export class GatewayError extends Error {
   status: number;
@@ -231,10 +232,6 @@ export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvalu
     violations,
     matchingGrant,
   };
-}
-
-export function evaluatePolicy(params: PolicyEvaluationParams): PolicyEvaluationResult {
-  return evaluateOrderPolicy(params);
 }
 
 /**

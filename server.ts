@@ -322,6 +322,43 @@ export async function createApp() {
     })
   );
 
+  // Helper to commit quote locks, register orders, and update warehouse stock atomically
+  function applyOrderStockDepletion(
+    order: any,
+    quoteLocked: any
+  ): void {
+    store.engine.quoteLocks.set(quoteLocked.quote_id, quoteLocked);
+    store.engine.orders.set(order.order_id, order);
+
+    const itemsToDeplete: { sku: string; packs: number }[] = [];
+    if (order.items && order.items.length > 0) {
+      for (const item of order.items) {
+        itemsToDeplete.push({ sku: item.sku, packs: item.pack_quantity });
+      }
+    } else {
+      itemsToDeplete.push({ sku: quoteLocked.sku, packs: quoteLocked.pack_quantity });
+    }
+
+    if (order.status === 'CONFIRMED') {
+      quoteLocked.status = 'CONSUMED';
+      for (const { sku, packs } of itemsToDeplete) {
+        const stockRec = store.engine.stock.get(sku);
+        if (stockRec) {
+          stockRec.available_packs = Math.max(0, stockRec.available_packs - packs);
+        }
+      }
+    } else if (order.status === 'PENDING_APPROVAL') {
+      for (const { sku, packs } of itemsToDeplete) {
+        const stockRec = store.engine.stock.get(sku);
+        if (stockRec) {
+          const actualPacks = Math.min(stockRec.available_packs, packs);
+          stockRec.available_packs = Math.max(0, stockRec.available_packs - actualPacks);
+          stockRec.reserved_packs += actualPacks;
+        }
+      }
+    }
+  }
+
   // --- Autonomous Buyer Agent & Scheduled Prompts ---
   api.post(
     '/agent/run',
@@ -345,37 +382,7 @@ export async function createApp() {
       });
 
       if (result.agentResponse.order && result.quoteLocked) {
-        store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
-        store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
-
-        // Deplete inventory when order is created and confirmed (BUG-05)
-        const itemsToDeplete: { sku: string; packs: number }[] = [];
-        if (result.agentResponse.order.items && result.agentResponse.order.items.length > 0) {
-          for (const item of result.agentResponse.order.items) {
-            itemsToDeplete.push({ sku: item.sku, packs: item.pack_quantity });
-          }
-        } else if (result.quoteLocked) {
-          itemsToDeplete.push({ sku: result.quoteLocked.sku, packs: result.quoteLocked.pack_quantity });
-        }
-
-        if (result.agentResponse.order.status === 'CONFIRMED') {
-          result.quoteLocked.status = 'CONSUMED';
-          for (const { sku, packs } of itemsToDeplete) {
-            const stockRec = store.engine.stock.get(sku);
-            if (stockRec) {
-              stockRec.available_packs = Math.max(0, stockRec.available_packs - packs);
-            }
-          }
-        } else if (result.agentResponse.order.status === 'PENDING_APPROVAL') {
-          for (const { sku, packs } of itemsToDeplete) {
-            const stockRec = store.engine.stock.get(sku);
-            if (stockRec) {
-              const actualPacks = Math.min(stockRec.available_packs, packs);
-              stockRec.available_packs = Math.max(0, stockRec.available_packs - actualPacks);
-              stockRec.reserved_packs += actualPacks;
-            }
-          }
-        }
+        applyOrderStockDepletion(result.agentResponse.order, result.quoteLocked);
 
         const activeModel = result.agentResponse.mode_used || 'gemini-2.5-flash';
         store.engine.addAuditLog({
@@ -414,37 +421,7 @@ export async function createApp() {
       });
 
       if (result.agentResponse.order && result.quoteLocked) {
-        store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
-        store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
-
-        // Deplete inventory when order is created and confirmed (BUG-05)
-        const itemsToDeplete: { sku: string; packs: number }[] = [];
-        if (result.agentResponse.order.items && result.agentResponse.order.items.length > 0) {
-          for (const item of result.agentResponse.order.items) {
-            itemsToDeplete.push({ sku: item.sku, packs: item.pack_quantity });
-          }
-        } else if (result.quoteLocked) {
-          itemsToDeplete.push({ sku: result.quoteLocked.sku, packs: result.quoteLocked.pack_quantity });
-        }
-
-        if (result.agentResponse.order.status === 'CONFIRMED') {
-          result.quoteLocked.status = 'CONSUMED';
-          for (const { sku, packs } of itemsToDeplete) {
-            const stockRec = store.engine.stock.get(sku);
-            if (stockRec) {
-              stockRec.available_packs = Math.max(0, stockRec.available_packs - packs);
-            }
-          }
-        } else if (result.agentResponse.order.status === 'PENDING_APPROVAL') {
-          for (const { sku, packs } of itemsToDeplete) {
-            const stockRec = store.engine.stock.get(sku);
-            if (stockRec) {
-              const actualPacks = Math.min(stockRec.available_packs, packs);
-              stockRec.available_packs = Math.max(0, stockRec.available_packs - actualPacks);
-              stockRec.reserved_packs += actualPacks;
-            }
-          }
-        }
+        applyOrderStockDepletion(result.agentResponse.order, result.quoteLocked);
 
         store.engine.addAuditLog({
           tenant_id: tenantId,
