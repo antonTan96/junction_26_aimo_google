@@ -47,7 +47,7 @@ const asyncHandler =
     Promise.resolve(fn(req, res, next)).catch(next);
   };
 
-async function startServer() {
+export async function createApp() {
   const app = express();
   const httpServer = http.createServer(app);
   app.use(express.json());
@@ -110,33 +110,30 @@ async function startServer() {
     });
   });
 
-  // --- Tools (Agent REST Gateway) ---
-  api.post(
-    '/tools/search_offers',
-    asyncHandler(async (req, res) => {
-      const principal = resolvePrincipal(req);
-      const offers = await store.searchOffers(principal, req.body || {});
-      res.json(offers);
-    })
-  );
+  // --- Tools (Agent REST Gateway) & Route Aliases ---
+  const searchOffersHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    const offers = await store.searchOffers(principal, req.body || {});
+    res.json(offers);
+  });
+  api.post('/tools/search_offers', searchOffersHandler);
+  api.post('/quotes/search', searchOffersHandler);
 
-  api.post(
-    '/tools/lock_quote',
-    asyncHandler(async (req, res) => {
-      const principal = resolvePrincipal(req);
-      const quote = await store.lockQuote(principal, req.body);
-      res.json(quote);
-    })
-  );
+  const lockQuoteHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    const quote = await store.lockQuote(principal, req.body);
+    res.json(quote);
+  });
+  api.post('/tools/lock_quote', lockQuoteHandler);
+  api.post('/quotes/lock', lockQuoteHandler);
 
-  api.post(
-    '/tools/commit_order',
-    asyncHandler(async (req, res) => {
-      const principal = resolvePrincipal(req);
-      const order = await store.commitOrder(principal, req.body);
-      res.json(order);
-    })
-  );
+  const commitOrderHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    const order = await store.commitOrder(principal, req.body);
+    res.json(order);
+  });
+  api.post('/tools/commit_order', commitOrderHandler);
+  api.post('/orders/commit', commitOrderHandler);
 
   // --- Orders & HITL Approvals ---
   api.get(
@@ -565,13 +562,12 @@ async function startServer() {
     })
   );
 
-  api.post(
-    '/admin/killswitch',
-    asyncHandler(async (req, res) => {
-      const halted = Boolean(req.body?.halted);
-      res.json(await store.setKillswitch(halted));
-    })
-  );
+  const killswitchHandler = asyncHandler(async (req, res) => {
+    const halted = Boolean(req.body?.halted);
+    res.json(await store.setKillswitch(halted));
+  });
+  api.post('/admin/killswitch', killswitchHandler);
+  api.post('/policies/killswitch', killswitchHandler);
 
   app.use('/api/v1', api);
 
@@ -585,24 +581,31 @@ async function startServer() {
   });
 
   // Vite middleware in dev, static dist in prod
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
-      },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+  if (process.env.SKIP_VITE !== 'true') {
+    if (process.env.NODE_ENV !== 'production') {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: process.env.DISABLE_HMR === 'true' ? false : { server: httpServer },
+        },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.resolve(__dirname, 'dist');
+      app.use(express.static(distPath));
+      app.get('*', (_req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
   }
 
+  return { app, httpServer, store };
+}
+
+export async function startServer() {
+  const { httpServer } = await createApp();
   const PORT = Number(process.env.PORT || 3000);
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`AimoGate server running on http://0.0.0.0:${PORT} (MCP: /mcp)`);
@@ -617,4 +620,6 @@ async function startServer() {
   });
 }
 
-startServer();
+if (process.env.NODE_ENV !== 'test' && !process.env.SKIP_SERVER_LISTEN) {
+  startServer();
+}

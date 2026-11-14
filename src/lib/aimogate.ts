@@ -1049,6 +1049,10 @@ export class AimoGateStore {
     this.requirePrincipal(principal, ['agent', 'human', 'admin'], ['quotes:lock']);
     const tenantId = principal.tenant_id;
 
+    if (typeof req.pack_quantity !== 'number' || req.pack_quantity <= 0 || !Number.isFinite(req.pack_quantity)) {
+      throw new GatewayError(400, `Pack quantity must be a positive number. Received: ${req.pack_quantity}`);
+    }
+
     const product = this.products.get(req.sku);
     if (!product || !product.is_active || product.roadmap_status !== 'LIVE') {
       throw new GatewayError(404, `SKU '${req.sku}' is unavailable or unreleased.`);

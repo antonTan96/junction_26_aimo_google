@@ -126,13 +126,14 @@ export class ValioAimoRAGService {
       const priceInfo = prices.get(prod.id);
       const stockInfo = availability.get(prod.id);
 
+      const packVol = prod.pack_volume_litres && prod.pack_volume_litres > 0 ? prod.pack_volume_litres : 1.0;
       const catalogPrice = priceInfo?.catalogPrice ?? prod.base_price_eur ?? 12.5;
-      const compPrice = priceInfo?.compPrice ?? Number((catalogPrice / Math.max(prod.pack_volume_litres, 1)).toFixed(2));
+      const compPrice = priceInfo?.compPrice ?? Number((catalogPrice / packVol).toFixed(2));
       const compUnit = priceInfo?.compUnit || 'L';
       const isAvailable = stockInfo?.isAvailable ?? true;
       const availablePacks = stockInfo?.availablePacks ?? 500;
 
-      const packsNeeded = Math.max(1, Math.ceil(parsed.volume_litres / Math.max(prod.pack_volume_litres, 1)));
+      const packsNeeded = Math.max(1, Math.ceil(parsed.volume_litres / packVol));
       const totalCost = Number((packsNeeded * catalogPrice).toFixed(2));
 
       const notes: string[] = [];

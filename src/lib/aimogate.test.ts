@@ -466,3 +466,214 @@ test('evaluateOrderPolicy: direct unit evaluation across windows and constraints
   assert.equal(res3.passes, false);
   assert.ok(res3.violations.some((v) => v.includes("Category rule for 'dairy' has expired on")));
 });
+
+test('Boundary test: exact €800.00 auto-approves, €800.01 is held in PENDING_APPROVAL', () => {
+  const policy: TenantPolicy = {
+    tenant_id: 'tenant_boundary',
+    tenant_name: 'Boundary Test Tenant',
+    max_auto_approve_eur: 800.0,
+    max_auto_approve_litres: 1000.0,
+    allowed_categories: ['dairy'],
+    anomaly_sensitivity_pct: 10,
+    auto_dispute_enabled: false,
+  };
+
+  const product: Product = {
+    sku: 'SKU-BOUNDARY',
+    name: 'Boundary Milk',
+    category: 'dairy',
+    dietary_tags: [],
+    pack_format: '1L',
+    pack_volume_litres: 1.0,
+    min_lead_time_hours: 24,
+    is_active: true,
+    internal_cost_eur: 1.0,
+    internal_margin_pct: 10,
+    roadmap_status: 'LIVE',
+  };
+
+  // Exact boundary: €800.00 -> PASS
+  const quoteExact: QuoteLock = {
+    quote_id: 'Q-BOUND-800',
+    tenant_id: 'tenant_boundary',
+    sku: 'SKU-BOUNDARY',
+    pack_quantity: 800,
+    total_litres: 800.0,
+    locked_total_eur: 800.0,
+    deliver_by: new Date(Date.now() + 86400_000).toISOString(),
+    status: 'LOCKED',
+    expires_at: new Date(Date.now() + 900_000).toISOString(),
+    created_at: new Date().toISOString(),
+  };
+
+  const resExact = evaluateOrderPolicy({ policy, product, quote: quoteExact });
+  assert.equal(resExact.passes, true);
+  assert.equal(resExact.violations.length, 0);
+
+  // Over boundary: €800.01 -> FAIL
+  const quoteOver: QuoteLock = {
+    ...quoteExact,
+    quote_id: 'Q-BOUND-800-01',
+    locked_total_eur: 800.01,
+  };
+
+  const resOver = evaluateOrderPolicy({ policy, product, quote: quoteOver });
+  assert.equal(resOver.passes, false);
+  assert.equal(resOver.violations.length, 1);
+  assert.equal(resOver.violations[0], 'Order total €800.01 exceeds autonomous limit of €800.00');
+});
+
+test('Boundary test: exact 600.0L auto-approves, 600.1L is held in PENDING_APPROVAL', () => {
+  const policy: TenantPolicy = {
+    tenant_id: 'tenant_boundary_vol',
+    tenant_name: 'Volume Boundary Tenant',
+    max_auto_approve_eur: 2000.0,
+    max_auto_approve_litres: 600.0,
+    allowed_categories: ['dairy'],
+    anomaly_sensitivity_pct: 10,
+    auto_dispute_enabled: false,
+  };
+
+  const product: Product = {
+    sku: 'SKU-VOL',
+    name: 'Volume Product',
+    category: 'dairy',
+    dietary_tags: [],
+    pack_format: '1L',
+    pack_volume_litres: 1.0,
+    min_lead_time_hours: 24,
+    is_active: true,
+    internal_cost_eur: 1.0,
+    internal_margin_pct: 10,
+    roadmap_status: 'LIVE',
+  };
+
+  // Exact volume: 600.0L -> PASS
+  const quoteExact: QuoteLock = {
+    quote_id: 'Q-VOL-600',
+    tenant_id: 'tenant_boundary_vol',
+    sku: 'SKU-VOL',
+    pack_quantity: 600,
+    total_litres: 600.0,
+    locked_total_eur: 600.0,
+    deliver_by: new Date(Date.now() + 86400_000).toISOString(),
+    status: 'LOCKED',
+    expires_at: new Date(Date.now() + 900_000).toISOString(),
+    created_at: new Date().toISOString(),
+  };
+
+  const resExact = evaluateOrderPolicy({ policy, product, quote: quoteExact });
+  assert.equal(resExact.passes, true);
+  assert.equal(resExact.violations.length, 0);
+
+  // Over volume: 600.1L -> FAIL
+  const quoteOver: QuoteLock = {
+    ...quoteExact,
+    quote_id: 'Q-VOL-600-1',
+    total_litres: 600.1,
+  };
+
+  const resOver = evaluateOrderPolicy({ policy, product, quote: quoteOver });
+  assert.equal(resOver.passes, false);
+  assert.equal(resOver.violations.length, 1);
+  assert.equal(resOver.violations[0], 'Order volume 600.1L exceeds autonomous limit of 600.0L');
+});
+
+test('Edge cases: pack_quantity <= 0 or non-numeric in lockQuote throws 400 Bad Request', () => {
+  const store = new AimoGateStore();
+  const agent = store.getPresetPrincipal('agent', DEFAULT_TENANT_ID);
+  const deliverBy = new Date(Date.now() + 3 * 86400_000).toISOString();
+
+  // 1. Zero quantity throws 400
+  assert.throws(
+    () => store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 0, deliver_by: deliverBy }),
+    (err: unknown) => err instanceof GatewayError && err.status === 400
+  );
+
+  // 2. Negative quantity throws 400
+  assert.throws(
+    () => store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: -10, deliver_by: deliverBy }),
+    (err: unknown) => err instanceof GatewayError && err.status === 400
+  );
+
+  // 3. NaN / Non-numeric throws 400
+  assert.throws(
+    () => store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: NaN as any, deliver_by: deliverBy }),
+    (err: unknown) => err instanceof GatewayError && err.status === 400
+  );
+});
+
+test('Recurrent Approval Grants: tracks spent budget, enforces exhaustion, and respects window expiry', () => {
+  const store = new AimoGateStore();
+  const agent = store.getPresetPrincipal('agent', DEFAULT_TENANT_ID);
+  const human = store.getPresetPrincipal('human', DEFAULT_TENANT_ID);
+
+  const tBase = new Date('2026-11-01T10:00:00.000Z');
+  const tExpiry = new Date('2026-11-08T10:00:00.000Z'); // 7 days window
+  const deliverBy = new Date(tBase.getTime() + 2 * 86400_000).toISOString();
+
+  // Create recurrent grant: €1000 cap on category 'dairy' for 7 days
+  const grantId = 'GRANT-TEST-001';
+  store.grants.set(grantId, {
+    grant_id: grantId,
+    tenant_id: DEFAULT_TENANT_ID,
+    category: 'dairy',
+    sku: null,
+    frequency: 'WEEKLY',
+    window_days: 7,
+    max_budget_per_period_eur: 1000,
+    current_period_spent_eur: 0,
+    valid_from: tBase.toISOString(),
+    valid_until: tExpiry.toISOString(),
+    status: 'ACTIVE',
+    approved_by: human.principal_id,
+    notes: null,
+    created_at: tBase.toISOString(),
+    is_valid: true,
+    days_remaining: 7,
+  });
+
+  // Default spend cap is €800.
+  // Order 1: 50 packs of 10L = €590 (above €800? No, €590 is within grant €1000).
+  // Order 1 commits under recurrent grant
+  const q1 = store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 50, deliver_by: deliverBy }, tBase);
+  assert.equal(q1.locked_total_eur, 590);
+  const o1 = store.commitOrder(agent, { quote_id: q1.quote_id, po_reference: 'PO-GRANT-1' }, tBase);
+  assert.equal(o1.status, 'CONFIRMED');
+  assert.equal(o1.approval_type, 'RECURRENT_WINDOW');
+  assert.equal(o1.recurrent_grant_id, grantId);
+
+  // Grant spent is now €590, remaining is €410
+  const grantAfterO1 = store.grants.get(grantId)!;
+  assert.equal(grantAfterO1.current_period_spent_eur, 590);
+
+  // Order 2: 30 packs of 10L = €354. Remaining grant budget is €410. €354 <= €410 -> commits under grant
+  const q2 = store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 30, deliver_by: deliverBy }, tBase);
+  assert.equal(q2.locked_total_eur, 354);
+  const o2 = store.commitOrder(agent, { quote_id: q2.quote_id, po_reference: 'PO-GRANT-2' }, tBase);
+  assert.equal(o2.status, 'CONFIRMED');
+  assert.equal(o2.approval_type, 'RECURRENT_WINDOW');
+
+  // Grant spent is now €590 + €354 = €944, remaining is €56
+  const grantAfterO2 = store.grants.get(grantId)!;
+  assert.equal(grantAfterO2.current_period_spent_eur, 944);
+
+  // Order 3: 10 packs of 10L = €118. Remaining grant budget is €56. €118 > €56 -> exceeds grant!
+  // In addition, total order (€118) is under default spend cap (€800), BUT wait:
+  // evaluateOrderPolicy detects grant budget exceeded and logs violation:
+  const q3 = store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 10, deliver_by: deliverBy }, tBase);
+  assert.equal(q3.locked_total_eur, 118);
+  const o3 = store.commitOrder(agent, { quote_id: q3.quote_id, po_reference: 'PO-GRANT-3-EXCEED' }, tBase);
+  // Fails with grant budget exceeded
+  assert.equal(o3.status, 'PENDING_APPROVAL');
+  assert.ok(o3.violation_reasons?.some((v) => v.includes('Recurrent grant budget exceeded')));
+
+  // Window Expiry: advance time past tExpiry (Day 10)
+  const tExpired = new Date('2026-11-12T10:00:00.000Z');
+  // Order 4: 80 packs = €944 (exceeds default €800 cap). Since grant is expired, it cannot use the grant.
+  const deliverBy4 = new Date(tExpired.getTime() + 2 * 86400_000).toISOString();
+  const q4 = store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 80, deliver_by: deliverBy4 }, tExpired);
+  const o4 = store.commitOrder(agent, { quote_id: q4.quote_id, po_reference: 'PO-GRANT-EXPIRED' }, tExpired);
+  assert.equal(o4.status, 'PENDING_APPROVAL');
+  assert.ok(o4.violation_reasons?.some((v) => v.includes('exceeds autonomous limit of €800.00')));
+});
