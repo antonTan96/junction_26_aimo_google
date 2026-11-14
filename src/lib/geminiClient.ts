@@ -48,6 +48,7 @@ export interface GeminiUnifiedProcurementResult {
  */
 export function sanitizeUntrustedPrompt(rawPrompt: string): {
   sanitized: string;
+  sanitizedPrompt: string;
   isInjectionAttempt: boolean;
   injectionFlags: string[];
 } {
@@ -150,7 +151,7 @@ export class GeminiClient {
     const executeModels = async () => {
       const candidateModels = [this.model, 'gemini-flash-latest'];
       const uniqueModels = Array.from(new Set(candidateModels.filter(Boolean)));
-      const modelTimeoutMs = 3500;
+      const modelTimeoutMs = 10000;
 
       for (const model of uniqueModels) {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -171,6 +172,7 @@ export class GeminiClient {
               systemInstruction: params.systemInstruction,
               responseMimeType: 'application/json',
               temperature: params.temperature ?? 0.1,
+              thinkingConfig: { thinkingBudget: 0 },
             },
           });
 
@@ -205,7 +207,7 @@ export class GeminiClient {
     };
 
     let overallTimer: ReturnType<typeof setTimeout> | undefined;
-    const overallTimeoutMs = 4500;
+    const overallTimeoutMs = 12000;
     const overallTimeoutPromise = new Promise<null>((resolve) => {
       overallTimer = setTimeout(() => {
         console.warn(`[GeminiClient] Total generateContentWithFallback timed out after ${overallTimeoutMs}ms, falling back.`);

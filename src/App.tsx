@@ -246,7 +246,7 @@ export default function App() {
     setAgentResponse(null);
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 18000);
       let res: Response;
       try {
         res = await fetch(`${API_BASE}/agent/run`, {
@@ -258,19 +258,6 @@ export default function App() {
             tenant_id: selectedTenant,
           }),
           signal: controller.signal,
-        });
-      } catch (fetchErr: any) {
-        clearTimeout(timeoutId);
-        console.warn('Agent run request timed out or network stalled. Falling back to deterministic engine:', fetchErr);
-        // Instant failover to deterministic mode (<25ms) so UI never freezes
-        res = await fetch(`${API_BASE}/agent/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            prompt,
-            mode: 'deterministic',
-            tenant_id: selectedTenant,
-          }),
         });
       } finally {
         clearTimeout(timeoutId);

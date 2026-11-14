@@ -381,6 +381,12 @@ export async function createApp() {
         customer: req.body?.customer || '123',
       });
 
+      // If client disconnected or cancelled the request before completion, do not commit order or deplete stock
+      if (req.destroyed || req.socket?.destroyed || res.writableEnded) {
+        console.warn(`[server] Client disconnected before order execution completed. Discarding order for prompt: "${req.body?.prompt}"`);
+        return;
+      }
+
       if (result.agentResponse.order && result.quoteLocked) {
         applyOrderStockDepletion(result.agentResponse.order, result.quoteLocked);
 
@@ -419,6 +425,12 @@ export async function createApp() {
         existingOrders: orders,
         customer: req.body?.customer || '123',
       });
+
+      // If client disconnected or cancelled the request before completion, do not commit order or deplete stock
+      if (req.destroyed || req.socket?.destroyed || res.writableEnded) {
+        console.warn(`[server] Client disconnected before order execution completed. Discarding order for prompt: "${req.body?.prompt}"`);
+        return;
+      }
 
       if (result.agentResponse.order && result.quoteLocked) {
         applyOrderStockDepletion(result.agentResponse.order, result.quoteLocked);
