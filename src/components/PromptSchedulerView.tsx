@@ -21,6 +21,7 @@ import {
   Utensils,
   ChefHat,
   Layers,
+  Info,
 } from 'lucide-react';
 import type {
   AgentRunResponse,
@@ -418,12 +419,16 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                 <div className="flex items-center gap-2.5">
                   {agentResponse.final_status === 'CONFIRMED' ? (
                     <CheckCircle2 className="w-5 h-5 text-primary shrink-0" />
+                  ) : agentResponse.final_status === 'INFORMATIONAL' ? (
+                    <Info className="w-5 h-5 text-primary shrink-0" />
                   ) : (
                     <AlertTriangle className="w-5 h-5 text-error shrink-0" />
                   )}
                   <h3 className="text-base font-semibold text-on-surface font-headline">
                     {agentResponse.final_status === 'CONFIRMED'
                       ? 'Order Confirmed Automatically'
+                      : agentResponse.final_status === 'INFORMATIONAL'
+                      ? 'Inquiry Answered (No Order Placed)'
                       : 'Order Held for Your Approval'}
                   </h3>
                 </div>
@@ -539,11 +544,17 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                     <div className="text-on-surface-variant">Status</div>
                     <div
                       className={`font-medium mt-0.5 ${
-                        agentResponse.final_status === 'CONFIRMED' ? 'text-primary' : 'text-error'
+                        agentResponse.final_status === 'CONFIRMED'
+                          ? 'text-primary'
+                          : agentResponse.final_status === 'INFORMATIONAL'
+                          ? 'text-primary'
+                          : 'text-error'
                       }`}
                     >
                       {agentResponse.final_status === 'CONFIRMED'
                         ? 'Confirmed'
+                        : agentResponse.final_status === 'INFORMATIONAL'
+                        ? 'Answered'
                         : 'Waiting for sign-off'}
                     </div>
                   </div>

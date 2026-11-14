@@ -2081,6 +2081,48 @@ export class AimoGateStore {
     const traces: AgentStepTrace[] = [];
     const preprocessed = preprocessBuyerPromptSync(req.prompt);
 
+    // Informational Inquiries (Policy, Stock, Pricing, Recipe questions) - Never place orders
+    if (
+      preprocessed.detected_intent === 'inquire_policy' ||
+      preprocessed.detected_intent === 'inquire_stock' ||
+      preprocessed.detected_intent === 'inquire_price' ||
+      preprocessed.detected_intent === 'inquire_recipe' ||
+      (preprocessed.items.length === 0 && preprocessed.detected_intent)
+    ) {
+      const intent = preprocessed.detected_intent || 'inquire_policy';
+      const policy = this.policies.get(tenantId)!;
+      const target = preprocessed.inquiry_target || 'general';
+
+      let summary = '';
+      if (intent === 'inquire_policy') {
+        const dairyLimit = policy?.max_auto_approve_litres || 1000.0;
+        summary = `Policy & Governance Summary for ${policy?.tenant_name || tenantId}: Max auto-approval spend limit is €${policy?.max_auto_approve_eur?.toFixed(2) || '1500.00'} per order. Weekly dairy volume ceiling is ${dairyLimit.toFixed(1)}L. Whitelisted categories: ${(policy?.allowed_categories || []).join(', ')}.`;
+      } else {
+        summary = preprocessed.notes || `Informational query regarding ${target}: no order was placed.`;
+      }
+
+      traces.push({
+        step_number: 1,
+        title: `Autonomous Intent & Inquiry Analysis (${intent})`,
+        description: summary,
+        action_type: 'reasoning',
+        latency_ms: 8,
+        tool_input: { prompt: req.prompt, preprocessed },
+        tool_output: { intent, target, summary },
+      });
+
+      return {
+        success: true,
+        mode_used: `deterministic-informational-${intent}`,
+        execution_time_ms: Date.now() - t0,
+        traces,
+        final_status: 'INFORMATIONAL',
+        summary_message: summary,
+        preprocessed_prompt: preprocessed,
+        order: null,
+      };
+    }
+
     // Multi-item or Recipe Procurement Flow
     if (preprocessed.request_type === 'recipe' || (preprocessed.request_type === 'multi_item' && preprocessed.items.length > 1)) {
       const isRecipe = preprocessed.request_type === 'recipe';
@@ -2333,6 +2375,23 @@ export class AimoGateStore {
 
     // Single item flow
     const parsed = parseBuyerPrompt(req.prompt);
+    if (
+      parsed.query === 'lactose-free milk' &&
+      !req.prompt.toLowerCase().includes('milk') &&
+      !req.prompt.toLowerCase().includes('dairy') &&
+      !req.prompt.toLowerCase().includes('maito')
+    ) {
+      if (preprocessed.items && preprocessed.items.length > 0) {
+        const singleItem = preprocessed.items[0];
+        if (singleItem) {
+          if (singleItem.search_query) parsed.query = singleItem.search_query;
+          if (singleItem.quantity && singleItem.quantity > 0) parsed.volume_litres = singleItem.quantity;
+          if (singleItem.dietary_tags && singleItem.dietary_tags.length > 0) {
+            parsed.attributes = Array.from(new Set([...parsed.attributes, ...singleItem.dietary_tags]));
+          }
+        }
+      }
+    }
 
     traces.push({
       step_number: 1,

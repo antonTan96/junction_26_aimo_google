@@ -259,6 +259,8 @@ export default function App() {
         await refreshAllData(selectedTenant);
         if (data.final_status === 'CONFIRMED') {
           showToast(`Order ${data.order?.order_id} confirmed automatically!`, 'success');
+        } else if (data.final_status === 'INFORMATIONAL') {
+          showToast('Inquiry answered with live data. No order placed.', 'info');
         } else {
           showToast(
             `Order ${data.order?.order_id} is held — waiting for your approval.`,

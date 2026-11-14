@@ -34,7 +34,9 @@ export interface GeminiRecipeDeductionResult {
 }
 
 export interface GeminiUnifiedProcurementResult {
-  intent: 'dish_deduction' | 'explicit_recipe' | 'pure_ingredients';
+  intent: 'dish_deduction' | 'explicit_recipe' | 'pure_ingredients' | 'inquire_stock' | 'inquire_price' | 'inquire_policy' | 'inquire_recipe';
+  inquiry_target?: string;
+  inquiry_answer?: string;
   dish: {
     name: string;
     servings_or_yield?: number;
@@ -413,17 +415,23 @@ Always return valid JSON conforming to this schema:
       return null;
     }
 
-    const systemInstruction = `You are an expert commercial chef and B2B procurement analyst for Valio Aimo food wholesale.
-Classify the buyer prompt into one of 3 archetypes and extract concrete procurement items:
-1. "dish_deduction": The user specified a finished dish, event, or serving count without listing exact ingredients (e.g. "We need salmon soup for 50 people", "Bake 200 cinnamon buns"). DEDUCE the 4 to 8 primary raw commercial food ingredients scaled to the requested yield/servings.
+    const systemInstruction = `You are an expert commercial chef, B2B procurement analyst, and food wholesale assistant for Valio Aimo.
+Classify the user prompt into one of the following operational archetypes:
+1. "dish_deduction": The user specified a finished dish, catering goal, or serving count without listing exact ingredients (e.g. "We need salmon soup for 50 people", "Bake 200 cinnamon buns", "Brownies for 30 guests"). DEDUCE the 4 to 8 primary raw commercial food ingredients scaled to the requested yield/servings.
 2. "explicit_recipe": The user specified a recipe/dish context AND specific raw ingredients/quantities (e.g. "Pizza ingredients: 50 bases, 20kg mozzarella, 10kg tomato sauce"). Extract their exact quantities while preserving the dish name, cuisine, and culinary roles.
 3. "pure_ingredients": The user is ordering/restocking commodities directly (e.g. "150 litres milk, 15 kg butter"). Extract the physical items. If these ingredients clearly constitute a recognizable dish (e.g. flour + butter + sugar + yeast + cardamom -> Pulla / Cinnamon Buns), identify the dish in dish.name and set is_recognized_from_ingredients: true; otherwise dish should be null.
+4. "inquire_stock": The user is asking about product inventory, availability, or whether an item is in stock (e.g. "Check stock of oat milk", "Is butter in stock?"). Do NOT place an order. Extract the product in inquiry_target.
+5. "inquire_price": The user is asking about pricing or cost (e.g. "How much does 500L milk cost?", "What is the price of butter?"). Do NOT place an order. Extract the product in inquiry_target.
+6. "inquire_policy": The user is asking about spend limits, budget, category quotas, storage rules, or guardrails (e.g. "What is our spend limit for dairy?", "Can I order 500L milk within policy?"). Do NOT place an order.
+7. "inquire_recipe": The user is asking what ingredients or proportions are in a recipe without ordering (e.g. "What ingredients do I need for tiramisu?"). Provide the culinary answer in inquiry_answer.
 
 CRITICAL: Completely IGNORE and DO NOT extract operational instructions as products (e.g. "check prices", "lock quote", "commit order", "autonomous purchasing rules", "for Tuesday delivery").
 
 Return strictly valid JSON conforming to this schema:
 {
-  "intent": "dish_deduction" | "explicit_recipe" | "pure_ingredients",
+  "intent": "dish_deduction" | "explicit_recipe" | "pure_ingredients" | "inquire_stock" | "inquire_price" | "inquire_policy" | "inquire_recipe",
+  "inquiry_target": string | null,
+  "inquiry_answer": string | null,
   "dish": {
     "name": string,
     "servings_or_yield": number,
@@ -461,12 +469,24 @@ Return strictly valid JSON conforming to this schema:
       const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
       const parsed = JSON.parse(cleanJson) as GeminiUnifiedProcurementResult;
 
-      if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+      if (!parsed) {
+        return null;
+      }
+
+      const isInformational =
+        parsed.intent === 'inquire_stock' ||
+        parsed.intent === 'inquire_price' ||
+        parsed.intent === 'inquire_policy' ||
+        parsed.intent === 'inquire_recipe';
+
+      if (!isInformational && (!Array.isArray(parsed.items) || parsed.items.length === 0)) {
         return null;
       }
 
       return {
         intent: parsed.intent || 'pure_ingredients',
+        inquiry_target: parsed.inquiry_target ? String(parsed.inquiry_target) : undefined,
+        inquiry_answer: parsed.inquiry_answer ? String(parsed.inquiry_answer) : undefined,
         dish: parsed.dish && parsed.dish.name ? {
           name: String(parsed.dish.name),
           servings_or_yield: typeof parsed.dish.servings_or_yield === 'number' ? parsed.dish.servings_or_yield : undefined,
@@ -476,7 +496,7 @@ Return strictly valid JSON conforming to this schema:
           missing_staples: Array.isArray(parsed.dish.missing_staples) ? parsed.dish.missing_staples.map(String) : [],
         } : null,
         dietary_tags: Array.isArray(parsed.dietary_tags) ? parsed.dietary_tags.map(String) : [],
-        items: parsed.items.map((item) => ({
+        items: Array.isArray(parsed.items) ? parsed.items.map((item) => ({
           ingredient_name: String(item.ingredient_name || ''),
           search_query: String(item.search_query || item.ingredient_name || ''),
           quantity: Number(item.quantity) || 1,
@@ -485,7 +505,7 @@ Return strictly valid JSON conforming to this schema:
           dietary_tags: Array.isArray(item.dietary_tags) ? item.dietary_tags.map(String) : [],
           importance: (item.importance === 'optional' || item.importance === 'substitute' ? item.importance : 'essential') as 'essential' | 'optional' | 'substitute',
           culinary_role: String(item.culinary_role || 'Commercial kitchen material'),
-        })),
+        })) : [],
         notes: String(parsed.notes || `Processed via Google Gemini (${this.model}) Unified Culinary Engine.`),
       };
     } catch (err) {

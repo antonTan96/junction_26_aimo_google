@@ -134,6 +134,199 @@ export class ValioAimoRAGService {
     const preprocessed = await preprocessBuyerPrompt(prompt);
     const traces: AgentStepTrace[] = [];
 
+    // Branch 0: Informational Inquiries (Policy, Stock, Pricing, Culinary questions) - No Orders Placed
+    if (
+      preprocessed.detected_intent === 'inquire_policy' ||
+      preprocessed.detected_intent === 'inquire_stock' ||
+      preprocessed.detected_intent === 'inquire_price' ||
+      preprocessed.detected_intent === 'inquire_recipe' ||
+      (preprocessed.items.length === 0 && preprocessed.detected_intent)
+    ) {
+      const intent = preprocessed.detected_intent || 'inquire_policy';
+      const target = preprocessed.inquiry_target || 'general';
+      const dateStr = preprocessed.deliver_by.slice(0, 10);
+
+      if (intent === 'inquire_policy') {
+        const oneWeekAgo = Date.now() - 7 * 86400_000;
+        const recentOrders = existingOrders.filter(
+          (o) => new Date(o.created_at).getTime() >= oneWeekAgo && o.status !== 'REJECTED'
+        );
+        const currentDairyVol = recentOrders.reduce((sum, o) => {
+          if (o.category?.toLowerCase() === 'dairy' || o.items?.some((it) => it.category?.toLowerCase() === 'dairy')) {
+            return sum + (o.total_litres || 0);
+          }
+          return sum;
+        }, 0);
+        const dairyLimit = policy.max_auto_approve_litres || 1000.0;
+        const remainingDairyVol = Math.max(0, dairyLimit - currentDairyVol);
+
+        const summary = `Policy & Governance Summary for ${policy.tenant_name}: Max auto-approval spend limit is €${policy.max_auto_approve_eur.toFixed(2)} per order. Weekly dairy storage cap is ${dairyLimit.toFixed(1)}L (Current period usage: ${currentDairyVol.toFixed(1)}L, Remaining capacity: ${remainingDairyVol.toFixed(1)}L). Whitelisted categories: ${(policy.allowed_categories || []).join(', ')}.`;
+
+        traces.push({
+          step_number: 1,
+          title: 'Autonomous Governance & Policy Inspection',
+          description: summary,
+          action_type: 'reasoning',
+          latency_ms: Math.max(12, Date.now() - t0),
+          tool_input: { prompt, policy_thresholds: policy },
+          tool_output: {
+            max_auto_approve_eur: policy.max_auto_approve_eur,
+            weekly_dairy_limit_litres: dairyLimit,
+            current_dairy_usage_litres: Number(currentDairyVol.toFixed(1)),
+            remaining_dairy_capacity_litres: Number(remainingDairyVol.toFixed(1)),
+            allowed_categories: policy.allowed_categories,
+          },
+        });
+
+        const agentResponse: AgentRunResponse = {
+          success: true,
+          mode_used: 'rag-informational-policy',
+          execution_time_ms: Date.now() - t0,
+          traces,
+          final_status: 'INFORMATIONAL',
+          summary_message: summary,
+          preprocessed_prompt: preprocessed,
+          order: null,
+        };
+
+        return {
+          query: prompt,
+          retrievedCount: 0,
+          candidates: [],
+          selectedProduct: null,
+          quoteLocked: null,
+          policyResult: { passes: true, violations: [], requiresHumanSignoff: false },
+          explanation: summary,
+          agentResponse,
+        };
+      }
+
+      if (intent === 'inquire_stock' || intent === 'inquire_price') {
+        const matches = this.catalog.search(target, { limit: 4 });
+        const candidateProducts = matches.length > 0 ? matches : this.catalog.getBuiltinStaples().slice(0, 3);
+        const productIds = candidateProducts.map((p) => p.id);
+
+        const [prices, availability] = await Promise.all([
+          this.catalog.fetchLivePrices(productIds, dateStr, customer),
+          this.catalog.fetchLiveAvailability(productIds, dateStr, customer),
+        ]);
+
+        const candidateContexts: RAGProductContext[] = candidateProducts.map((prod) => {
+          const priceInfo = prices.get(prod.id);
+          const stockInfo = availability.get(prod.id);
+          const packVol = prod.pack_volume_litres && prod.pack_volume_litres > 0 ? prod.pack_volume_litres : 1.0;
+          const catalogPrice = priceInfo?.catalogPrice ?? prod.base_price_eur ?? 12.5;
+          const compPrice = priceInfo?.compPrice ?? Number((catalogPrice / packVol).toFixed(2));
+          const compUnit = priceInfo?.compUnit || 'L';
+          const isAvail = stockInfo?.isAvailable ?? true;
+          const availPacks = stockInfo?.availablePacks ?? 500;
+
+          return {
+            product: prod,
+            catalogPriceEur: catalogPrice,
+            comparisonPriceEur: compPrice,
+            comparisonUnit: compUnit,
+            isAvailable: isAvail,
+            availablePacks: availPacks,
+            packsRequired: 1,
+            totalCostEur: catalogPrice,
+            compliancePass: isAvail,
+            complianceNotes: [],
+          };
+        });
+
+        const itemsSummary = candidateContexts
+          .map(
+            (c) =>
+              `${c.product.display_name} (${c.product.pack_format}): €${c.catalogPriceEur.toFixed(2)}/pack (€${c.comparisonPriceEur.toFixed(2)}/${c.comparisonUnit}), Stock: ${c.availablePacks} packs available`
+          )
+          .join('; ');
+
+        const isPrice = intent === 'inquire_price';
+        const summary = isPrice
+          ? `Live Contract Pricing for '${target}': ${itemsSummary}. (No quote locked, no order placed).`
+          : `Live Stock & Availability for '${target}': ${itemsSummary}. (No quote locked, no order placed).`;
+
+        traces.push({
+          step_number: 1,
+          title: isPrice ? 'Live Wholesale Contract Price Lookup' : 'Live Warehouse Stock & Availability Lookup',
+          description: summary,
+          action_type: 'tool_call',
+          tool_name: isPrice ? 'valio_aimo_live_prices' : 'valio_aimo_live_availability',
+          latency_ms: Math.max(15, Date.now() - t0),
+          tool_input: { query: target, customer, date: dateStr },
+          tool_output: candidateContexts.map((c) => ({
+            sku: c.product.id,
+            display_name: c.product.display_name,
+            pack_format: c.product.pack_format,
+            price_eur: c.catalogPriceEur,
+            comp_price: `€${c.comparisonPriceEur}/${c.comparisonUnit}`,
+            stock_packs: c.availablePacks,
+            in_stock: c.isAvailable,
+          })),
+        });
+
+        const agentResponse: AgentRunResponse = {
+          success: true,
+          mode_used: `rag-informational-${intent}`,
+          execution_time_ms: Date.now() - t0,
+          traces,
+          final_status: 'INFORMATIONAL',
+          summary_message: summary,
+          preprocessed_prompt: preprocessed,
+          order: null,
+        };
+
+        return {
+          query: target,
+          retrievedCount: candidateContexts.length,
+          candidates: candidateContexts,
+          selectedProduct: candidateContexts[0] || null,
+          quoteLocked: null,
+          policyResult: { passes: true, violations: [], requiresHumanSignoff: false },
+          explanation: summary,
+          agentResponse,
+        };
+      }
+
+      if (intent === 'inquire_recipe') {
+        const recipeAnswer =
+          preprocessed.notes || `Culinary specifications and raw ingredient requirements for '${target}'.`;
+
+        traces.push({
+          step_number: 1,
+          title: 'Culinary Recipe & Ingredient Specification',
+          description: recipeAnswer,
+          action_type: 'reasoning',
+          latency_ms: Math.max(10, Date.now() - t0),
+          tool_input: { prompt, target },
+          tool_output: { recipe_details: recipeAnswer },
+        });
+
+        const agentResponse: AgentRunResponse = {
+          success: true,
+          mode_used: 'rag-informational-recipe',
+          execution_time_ms: Date.now() - t0,
+          traces,
+          final_status: 'INFORMATIONAL',
+          summary_message: recipeAnswer,
+          preprocessed_prompt: preprocessed,
+          order: null,
+        };
+
+        return {
+          query: target,
+          retrievedCount: 0,
+          candidates: [],
+          selectedProduct: null,
+          quoteLocked: null,
+          policyResult: { passes: true, violations: [], requiresHumanSignoff: false },
+          explanation: recipeAnswer,
+          agentResponse,
+        };
+      }
+    }
+
     // Branch A: Multi-item or Recipe Procurement Flow
     if (preprocessed.request_type === 'recipe' || (preprocessed.request_type === 'multi_item' && preprocessed.items.length > 1)) {
       const isRecipe = preprocessed.request_type === 'recipe';
@@ -378,6 +571,24 @@ export class ValioAimoRAGService {
     // Branch B: Single Item Procurement Flow (Backward-Compatible Standard RAG)
     const parsed = parseBuyerPrompt(prompt);
     parsed.query = stripOperationalDirectives(parsed.query);
+
+    if (
+      parsed.query === 'lactose-free milk' &&
+      !prompt.toLowerCase().includes('milk') &&
+      !prompt.toLowerCase().includes('dairy') &&
+      !prompt.toLowerCase().includes('maito')
+    ) {
+      if (preprocessed.items && preprocessed.items.length > 0) {
+        const singleItem = preprocessed.items[0];
+        if (singleItem) {
+          if (singleItem.search_query) parsed.query = singleItem.search_query;
+          if (singleItem.quantity && singleItem.quantity > 0) parsed.volume_litres = singleItem.quantity;
+          if (singleItem.dietary_tags && singleItem.dietary_tags.length > 0) {
+            parsed.attributes = Array.from(new Set([...parsed.attributes, ...singleItem.dietary_tags]));
+          }
+        }
+      }
+    }
 
     // Step 1: Retrieval from Catalog (MariaDB / In-Memory Index)
     const rawCandidates = parsed.query.length === 0

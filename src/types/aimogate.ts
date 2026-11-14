@@ -137,6 +137,14 @@ export interface OrderDTO {
 
 export type ProcurementRequestType = 'single_item' | 'multi_item' | 'recipe';
 
+export type BuyerIntentType =
+  | 'procurement_dish'
+  | 'procurement_order'
+  | 'inquire_stock'
+  | 'inquire_price'
+  | 'inquire_policy'
+  | 'inquire_recipe';
+
 export interface DecomposedIngredient {
   ingredient_name: string;
   search_query: string;
@@ -162,6 +170,8 @@ export interface RecipeMetadata {
 export interface PreprocessedPromptResult {
   raw_prompt: string;
   request_type: ProcurementRequestType;
+  detected_intent?: BuyerIntentType;
+  inquiry_target?: string;
   recipe?: RecipeMetadata;
   dietary_tags: string[];
   urgency?: 'normal' | 'urgent' | 'asap';

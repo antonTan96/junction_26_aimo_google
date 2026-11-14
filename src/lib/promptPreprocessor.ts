@@ -1,4 +1,5 @@
 import {
+  type BuyerIntentType,
   type DecomposedIngredient,
   type PreprocessedPromptResult,
   type ProcurementRequestType,
@@ -677,9 +678,9 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
     .replace(/\s*\.\s*/g, ', ')
     .trim();
 
-  // Split on "and", "plus", "sekä", "ja", semicolons, commas preceding numbers or quantities, or newlines
+  // Split on "and", "plus", "sekä", "ja", semicolons, commas, newlines, or periods
   const segments = cleanInput
-    .split(/\n+|;\s*|\s+(?:and|plus|sekä|ja)\s+|,\s*(?=(?:[a-zA-Z\s]+?\s+)?\d+(?:\.\d+)?\s*(?:l|litres?|liter|liters|kg|kilo|kilos|boxes?|packs?|units?|g)\b)/i)
+    .split(/\n+|;\s*|\s+(?:and|plus|sekä|ja)\s+|,\s*|\.\s+/i)
     .map((s) => s.replace(/^[,\.\s\-]+|[,\.\s\-]+$/g, '').trim())
     .filter(Boolean);
 
@@ -691,6 +692,16 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
       .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme)\s+/gi, '')
       .replace(/^[,\.\s\-]+|[,\.\s\-]+$/g, '')
       .trim();
+
+    if (!seg) continue;
+
+    // Detect if this segment is purely a quantity without a product name (e.g. "(15 kg)", "150L", "20 boxes")
+    const pureQtyMatch = seg.match(/^[\(\[]?\s*([\d,]+(?:\.\d+)?)\s*(l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?|g|gram|grams|boxes?|packs?|units?|pcs)\s*[\)\]]?$/i);
+    if (pureQtyMatch && items.length > 0 && items[items.length - 1].unit === 'units' && items[items.length - 1].quantity === 1) {
+      items[items.length - 1].quantity = parseFloat(pureQtyMatch[1].replace(/,/g, ''));
+      items[items.length - 1].unit = normalizeUnit(pureQtyMatch[2]);
+      continue;
+    }
 
     // Quantity regex: e.g. "50 liters of organic whole milk", "10kg butter", "20 boxes croissants"
     const volMatch = seg.match(/^([\d,]+(?:\.\d+)?)\s*(l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?)\b\s*(?:of\s+)?(.*)$/i);
@@ -741,6 +752,7 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
       !cleanItem ||
       cleanItem.length < 2 ||
       stopWords.test(cleanItem) ||
+      /^[\(\[\d\s\.,\-\)\]]+$/.test(cleanItem) ||
       /\b(?:lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules|check\s+fixed|contract\s+prices?|autonomous\s+purchasing)\b/i.test(cleanItem)
     ) {
       continue;
@@ -791,6 +803,65 @@ export function calculateDefaultDeliverBy(now: Date = new Date()): string {
 }
 
 /**
+ * Classifies buyer natural language input into operational intent archetypes.
+ */
+export function detectBuyerIntent(prompt: string): BuyerIntentType {
+  const p = prompt.toLowerCase().trim();
+
+  // 1. Policy & Governance Inquiry
+  if (
+    /\b(?:what\s+is|check|show|tell\s+me|how\s+much\s+is)\s+(?:our\s+)?(?:spend|spending|budget|cap|limit|threshold|guardrail|rule|quota)\b/i.test(p) ||
+    /\b(?:spend|spending|budget|cap|limit|threshold)\s+(?:for|on|in)\s+[a-z0-9_-]+\b/i.test(p) ||
+    /\bcan\s+(?:we|i)\s+(?:order|buy|spend|purchase)\b.*\b(?:within|under|allowed|policy|rule|limit)\b/i.test(p) ||
+    /\b(?:what|which)\s+categories\s+(?:are\s+)?(?:allowed|whitelisted|permitted)\b/i.test(p) ||
+    /\b(?:active|current)\s+(?:substitution|category)\s+rules\b/i.test(p) ||
+    /\bpaljonko\s+(?:budjettia|rajaa|kattoa)\b/i.test(p) ||
+    /\bsallitut\s+kategoriat\b/i.test(p)
+  ) {
+    return 'inquire_policy';
+  }
+
+  // 2. Stock / Inventory / Availability Inquiry (without an explicit purchase command)
+  const isQuestionOrCheck =
+    /^(?:check|verify|lookup|is\s+there|are\s+there|do\s+we\s+have|how\s+much\s+(?:stock|inventory)|what\s+is\s+the\s+availability|onko\s+varastossa|onko\s+saatavilla|tarkista\s+saatavuus)\b/i.test(p) ||
+    /\b(?:in\s+stock\??|available\??|saatavilla\??|varastossa\??)$/i.test(p);
+
+  const hasOrderVerb = /\b(?:please\s+)?(?:order|buy|purchase|deliver|procure|lock\s+the\s+quote|commit\s+the\s+order|tilaa|tilatkaa|ostakaa)\b/i.test(p);
+
+  if (isQuestionOrCheck && !hasOrderVerb && !/\b(?:for\s+tuesday|for\s+monday|by\s+friday)\b/i.test(p)) {
+    if (/\b(?:price|cost|pricing|hinta|paljonko\s+maksaa)\b/i.test(p)) {
+      return 'inquire_price';
+    }
+    return 'inquire_stock';
+  }
+
+  if (/\b(?:what\s+is\s+the\s+price|how\s+much\s+does\s+.*cost|check\s+(?:the\s+)?price|mitä\s+maksaa|hinta\b)/i.test(p) && !hasOrderVerb) {
+    return 'inquire_price';
+  }
+
+  // 3. Recipe Inquiry (how to make X, what ingredients for X without order command)
+  if (
+    /\b(?:what\s+(?:are\s+the\s+)?ingredients|how\s+(?:to|do\s+i)\s+(?:make|bake|cook)|mitä\s+aineksia)\b/i.test(p) &&
+    !hasOrderVerb
+  ) {
+    return 'inquire_recipe';
+  }
+
+  // 4. Culinary Recipe Deduction (Dish / Meal / Event goal)
+  if (
+    /\b(?:recipe\s+for|resepti\s*:?|ainekset\s*:?|ingredients\s+for)\b/i.test(p) ||
+    /\b(?:bake|cook|prepare|make|cater|serve|leipoa|valmistaa|keittää)\s+(?:[\w-]+\s+){0,3}(?:cookies?|buns?|cake|pie|soup|tiramisu|pizza|brownies?|lasagna|pasta|bread|korvapuusti|korvapuusteja|korvapuustia|lohikeitto|lohikeittoa|pulla|pullaa)\b/i.test(p) ||
+    /\b(?:salmon\s+soup|lohikeitto|lohikeittoa|cinnamon\s+buns?|korvapuusti|korvapuustia|tiramisu|pizza)\s+(?:for\s+)?\d+\s*(?:people|guests|portions|servings|henkeä|annosta)\b/i.test(p) ||
+    /\b\d+\s*(?:cookies?|keksejä|keksiä|buns?|puustia?|portions?|annosta|servings?)\s+(?:for\s+)?(?:a\s+)?(?:wedding|event|party|buffet|lunch|dinner|catering)\b/i.test(p) ||
+    /\b(?:cookies?|keksejä|buns?|puustia?|lohikeitto|lohikeittoa|soup)\s+for\s+\d+\b/i.test(p)
+  ) {
+    return 'procurement_dish';
+  }
+
+  return 'procurement_order';
+}
+
+/**
  * Preprocess natural language buyer prompts synchronously into structured procurement items,
  * identifying recipes, deducing necessary raw materials, and scaling quantities deterministically.
  */
@@ -801,6 +872,35 @@ export function preprocessBuyerPromptSync(
   const tLower = prompt.toLowerCase();
   const dietaryTags = extractShortTags(prompt);
   const deliverBy = calculateDefaultDeliverBy(now);
+  const detectedIntent = detectBuyerIntent(prompt);
+
+  // Informational Inquiries (Policy, Stock, Price, Recipe questions) - Never place orders
+  if (
+    detectedIntent === 'inquire_policy' ||
+    detectedIntent === 'inquire_stock' ||
+    detectedIntent === 'inquire_price' ||
+    detectedIntent === 'inquire_recipe'
+  ) {
+    let target = '';
+    if (tLower.includes('dairy') || tLower.includes('maito') || tLower.includes('milk')) target = 'dairy';
+    else if (tLower.includes('bakery') || tLower.includes('leipomo') || tLower.includes('bread') || tLower.includes('croissant')) target = 'bakery';
+    else if (tLower.includes('produce') || tLower.includes('vihannes')) target = 'produce';
+    else if (tLower.includes('beverage') || tLower.includes('coffee') || tLower.includes('kahvi')) target = 'beverages';
+    else {
+      target = prompt.replace(/\b(?:check|verify|lookup|stock|price|pricing|what\s+is|how\s+much|does|is|are|in|available|our|spend|limit|for|of)\b/gi, ' ').replace(/[?.,!]+/g, '').trim();
+    }
+
+    return {
+      raw_prompt: prompt,
+      request_type: 'single_item',
+      detected_intent: detectedIntent,
+      inquiry_target: target || 'general',
+      dietary_tags: dietaryTags,
+      deliver_by: deliverBy,
+      items: [],
+      notes: `Informational inquiry detected: ${detectedIntent}`,
+    };
+  }
 
   // 1. Identify if prompt contains a known recipe from the culinary ontology
   let matchedRecipeKey: string | null = null;
@@ -959,6 +1059,25 @@ export async function preprocessBuyerPrompt(
       const gemini = GeminiClient.getInstance();
       if (gemini.isAvailable()) {
         const unified = await gemini.analyzeProcurementIntent(prompt);
+        if (
+          unified &&
+          (unified.intent === 'inquire_stock' ||
+            unified.intent === 'inquire_price' ||
+            unified.intent === 'inquire_policy' ||
+            unified.intent === 'inquire_recipe')
+        ) {
+          return {
+            raw_prompt: prompt,
+            request_type: 'single_item',
+            detected_intent: unified.intent,
+            inquiry_target: unified.inquiry_target || undefined,
+            dietary_tags: unified.dietary_tags || [],
+            deliver_by: deliverBy,
+            items: [],
+            notes: unified.inquiry_answer || unified.notes || `Informational inquiry detected: ${unified.intent}`,
+          };
+        }
+
         if (unified && unified.items && unified.items.length > 0) {
           const dietaryTags = Array.from(new Set([...extractShortTags(prompt), ...unified.dietary_tags]));
           const isRecipe =

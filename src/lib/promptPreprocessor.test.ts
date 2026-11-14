@@ -201,3 +201,36 @@ test('Prompt Preprocessor: Reverse recipe matching recognizes dish from pure ing
   assert.ok((result.recipe.servings_or_yield || 0) >= 50);
   assert.ok(result.items.length >= 4);
 });
+
+test('Prompt Preprocessor: Sanitizes operational directives and extracts items cleanly without phantom products', () => {
+  const prompt =
+    '"Order 150 litres of Valio lactose-free semi-skimmed milk, unsalted butter for Tuesday morning delivery. Check fixed contract prices (15 kg), availability, lock the quote, commit the order if it complies with our autonomous purchasing rules."';
+  const result = preprocessBuyerPromptSync(prompt);
+
+  assert.equal(result.items.length, 2, 'Should decompose into exactly 2 physical products');
+  assert.equal(result.items[0].ingredient_name, 'Valio lactose-free semi-skimmed milk');
+  assert.equal(result.items[0].quantity, 150);
+  assert.equal(result.items[0].unit, 'L');
+  assert.equal(result.items[1].ingredient_name, 'unsalted butter');
+  assert.equal(result.items[1].quantity, 15);
+  assert.equal(result.items[1].unit, 'kg');
+});
+
+test('ValioAimoRAGService: Informational inquiries return live data without phantom order or quote lock', async () => {
+  const rag = ValioAimoRAGService.getInstance();
+
+  const policyRes = await rag.executeRAGPipeline({ prompt: 'What is our spend limit for dairy?' });
+  assert.equal(policyRes.agentResponse.final_status, 'INFORMATIONAL');
+  assert.equal(policyRes.agentResponse.order, null);
+  assert.ok(policyRes.agentResponse.summary_message.includes('Policy & Governance Summary'));
+
+  const stockRes = await rag.executeRAGPipeline({ prompt: 'Check stock of oat milk' });
+  assert.equal(stockRes.agentResponse.final_status, 'INFORMATIONAL');
+  assert.equal(stockRes.agentResponse.order, null);
+  assert.ok(stockRes.agentResponse.summary_message.includes('Live Stock & Availability'));
+
+  const priceRes = await rag.executeRAGPipeline({ prompt: 'What is the price of butter?' });
+  assert.equal(priceRes.agentResponse.final_status, 'INFORMATIONAL');
+  assert.equal(priceRes.agentResponse.order, null);
+  assert.ok(priceRes.agentResponse.summary_message.includes('Live Contract Pricing'));
+});
