@@ -28,7 +28,10 @@ const store = new PersistentAimoGateStore();
 
 function resolvePrincipal(req: Request): Principal {
   const auth = req.headers.authorization;
-  const queryTenant = typeof req.query.tenant_id === 'string' ? req.query.tenant_id : undefined;
+  const queryTenant =
+    typeof req.query.tenant_id === 'string' && req.query.tenant_id.trim()
+      ? req.query.tenant_id.trim()
+      : undefined;
 
   if (!auth || !auth.startsWith('Bearer ')) {
     return store.engine.getPresetPrincipal('agent', queryTenant || DEFAULT_TENANT_ID);
@@ -39,12 +42,23 @@ function resolvePrincipal(req: Request): Principal {
   if (parts.length >= 3 && parts[0] === 'aimo') {
     const role = parts[1] as PrincipalType;
     const tokenTenant = parts.slice(2).join('.') || DEFAULT_TENANT_ID;
+    if (queryTenant && queryTenant !== tokenTenant) {
+      throw new GatewayError(403, 'Cross-tenant impersonation forbidden.');
+    }
     if (role === 'agent' || role === 'human' || role === 'admin') {
-      return store.engine.getPresetPrincipal(role, queryTenant || tokenTenant);
+      return store.engine.getPresetPrincipal(role, tokenTenant);
     }
   }
 
   throw new GatewayError(401, 'Invalid or unrecognized bearer token.');
+}
+
+function requirePrincipal(
+  principal: Principal,
+  allowedTypes: PrincipalType[],
+  requiredScopes: string[] = []
+): void {
+  store.engine.requirePrincipal(principal, allowedTypes, requiredScopes);
 }
 
 const asyncHandler =
@@ -59,6 +73,37 @@ export async function createApp() {
   app.use(express.json());
 
   const api = express.Router();
+
+  // Guard /api/v1/policies/killswitch, /api/v1/admin/*, and /demo/* endpoints with requirePrincipal(principal, ['admin'])
+  api.use('/admin', (req, res, next) => {
+    try {
+      const principal = resolvePrincipal(req);
+      requirePrincipal(principal, ['admin']);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  api.use('/demo', (req, res, next) => {
+    try {
+      const principal = resolvePrincipal(req);
+      requirePrincipal(principal, ['admin']);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  api.use('/policies/killswitch', (req, res, next) => {
+    try {
+      const principal = resolvePrincipal(req);
+      requirePrincipal(principal, ['admin']);
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // Health & Gateway Root
   app.get('/health', (_req, res) => {
@@ -329,6 +374,36 @@ export async function createApp() {
       if (result.agentResponse.order && result.quoteLocked) {
         store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
         store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
+
+        // Deplete inventory when order is created and confirmed (BUG-05)
+        const itemsToDeplete: { sku: string; packs: number }[] = [];
+        if (result.agentResponse.order.items && result.agentResponse.order.items.length > 0) {
+          for (const item of result.agentResponse.order.items) {
+            itemsToDeplete.push({ sku: item.sku, packs: item.pack_quantity });
+          }
+        } else if (result.quoteLocked) {
+          itemsToDeplete.push({ sku: result.quoteLocked.sku, packs: result.quoteLocked.pack_quantity });
+        }
+
+        if (result.agentResponse.order.status === 'CONFIRMED') {
+          result.quoteLocked.status = 'CONSUMED';
+          for (const { sku, packs } of itemsToDeplete) {
+            const stockRec = store.engine.stock.get(sku);
+            if (stockRec) {
+              stockRec.available_packs = Math.max(0, stockRec.available_packs - packs);
+            }
+          }
+        } else if (result.agentResponse.order.status === 'PENDING_APPROVAL') {
+          for (const { sku, packs } of itemsToDeplete) {
+            const stockRec = store.engine.stock.get(sku);
+            if (stockRec) {
+              const actualPacks = Math.min(stockRec.available_packs, packs);
+              stockRec.available_packs = Math.max(0, stockRec.available_packs - actualPacks);
+              stockRec.reserved_packs += actualPacks;
+            }
+          }
+        }
+
         const activeModel = result.agentResponse.mode_used || 'gemini-2.5-flash';
         store.engine.addAuditLog({
           tenant_id: tenantId,
@@ -368,6 +443,36 @@ export async function createApp() {
       if (result.agentResponse.order && result.quoteLocked) {
         store.engine.quoteLocks.set(result.quoteLocked.quote_id, result.quoteLocked);
         store.engine.orders.set(result.agentResponse.order.order_id, result.agentResponse.order);
+
+        // Deplete inventory when order is created and confirmed (BUG-05)
+        const itemsToDeplete: { sku: string; packs: number }[] = [];
+        if (result.agentResponse.order.items && result.agentResponse.order.items.length > 0) {
+          for (const item of result.agentResponse.order.items) {
+            itemsToDeplete.push({ sku: item.sku, packs: item.pack_quantity });
+          }
+        } else if (result.quoteLocked) {
+          itemsToDeplete.push({ sku: result.quoteLocked.sku, packs: result.quoteLocked.pack_quantity });
+        }
+
+        if (result.agentResponse.order.status === 'CONFIRMED') {
+          result.quoteLocked.status = 'CONSUMED';
+          for (const { sku, packs } of itemsToDeplete) {
+            const stockRec = store.engine.stock.get(sku);
+            if (stockRec) {
+              stockRec.available_packs = Math.max(0, stockRec.available_packs - packs);
+            }
+          }
+        } else if (result.agentResponse.order.status === 'PENDING_APPROVAL') {
+          for (const { sku, packs } of itemsToDeplete) {
+            const stockRec = store.engine.stock.get(sku);
+            if (stockRec) {
+              const actualPacks = Math.min(stockRec.available_packs, packs);
+              stockRec.available_packs = Math.max(0, stockRec.available_packs - actualPacks);
+              stockRec.reserved_packs += actualPacks;
+            }
+          }
+        }
+
         store.engine.addAuditLog({
           tenant_id: tenantId,
           actor_type: 'agent',
@@ -679,6 +784,8 @@ export async function createApp() {
   );
 
   const killswitchHandler = asyncHandler(async (req, res) => {
+    const principal = resolvePrincipal(req);
+    requirePrincipal(principal, ['admin']);
     const halted = Boolean(req.body?.halted);
     res.json(await store.setKillswitch(halted));
   });

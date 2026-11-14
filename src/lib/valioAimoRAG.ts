@@ -32,6 +32,47 @@ export interface RAGProductContext {
   complianceNotes: string[];
 }
 
+export function stripOperationalDirectives(query: string): string {
+  if (!query) return '';
+  let cleaned = query;
+
+  const directivePatterns = [
+    /\b(?:please\s+)?check\s+fixed\s+contract\s+prices?\b/gi,
+    /\b(?:please\s+)?check\s+contract\s+prices?\b/gi,
+    /\b(?:please\s+)?check\s+(?:live\s+)?prices?\b/gi,
+    /\b(?:please\s+)?check\s+availability\b/gi,
+    /\b(?:please\s+)?lock\s+(?:the\s+)?(?:quote|price)\b/gi,
+    /\b(?:please\s+)?commit\s+(?:the\s+)?(?:order|quote)\b/gi,
+    /\b(?:please\s+)?confirm\s+(?:the\s+)?order\b/gi,
+    /\b(?:please\s+)?place\s+(?:the\s+)?order\b/gi,
+    /\b(?:please\s+)?submit\s+(?:the\s+)?order\b/gi,
+    /\bif\s+it\s+complies\s+with\s+(?:our\s+)?(?:autonomous\s+)?purchasing\s+rules\b/gi,
+    /\b(?:our\s+)?(?:autonomous\s+)?purchasing\s+rules\b/gi,
+    /\b(?:based\s+on\s+)?prices?\s+and\s+availability\b/gi,
+    /\bfind\s+an\s+option\s+based\s+on\s+price\s+and\s+availability\b/gi,
+    /\bfind\s+an\s+option\b/gi,
+    /\bfixed\s+contract\s+prices?\b/gi,
+    /\bcontract\s+prices?\b/gi,
+    /\bwithin\s+policy(?:\s+limits)?\b/gi,
+    /\bautonomous\s+purchasing\b/gi,
+    /\bfor\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi,
+    /\bby\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today)(?:\s+(?:morning|afternoon|evening))?\b/gi,
+  ];
+
+  for (const pat of directivePatterns) {
+    cleaned = cleaned.replace(pat, ' ');
+  }
+
+  // Clean trailing punctuation, extra spaces, leading/trailing conjunctions
+  cleaned = cleaned
+    .replace(/[,\.;:!?]+/g, ' ')
+    .replace(/\b(?:and|or|then|if|with|for|to)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return cleaned;
+}
+
 export interface RAGExecutionResult {
   query: string;
   retrievedCount: number;
@@ -72,9 +113,16 @@ export class ValioAimoRAGService {
     policy: TenantPolicy;
     existingOrders?: OrderDTO[];
     customer?: string;
+    store?: { killswitchHalted?: boolean; [key: string]: any };
+    killswitchHalted?: boolean;
   }): Promise<RAGExecutionResult> {
     const t0 = Date.now();
     const { prompt, policy, existingOrders = [], customer = '123' } = params;
+    const isKillswitchHalted = Boolean(
+      params.killswitchHalted ??
+      params.store?.killswitchHalted ??
+      params.store?.engine?.killswitchHalted
+    );
     const preprocessed = await preprocessBuyerPrompt(prompt);
     const traces: AgentStepTrace[] = [];
 
@@ -196,10 +244,23 @@ export class ValioAimoRAGService {
       }
 
       totalCostEur = Number(totalCostEur.toFixed(2));
+      totalLitres = Number(totalLitres.toFixed(2));
+
+      if (isKillswitchHalted) {
+        policyViolations.push(
+          'GLOBAL KILLSWITCH ARMED: All autonomous agent transactions are halted by operator circuit breaker.'
+        );
+      }
 
       if (totalCostEur > policy.max_auto_approve_eur) {
         policyViolations.push(
           `Total composite order cost €${totalCostEur.toFixed(2)} exceeds tenant auto-approval limit of €${policy.max_auto_approve_eur.toFixed(2)}`
+        );
+      }
+
+      if (policy.max_auto_approve_litres && policy.max_auto_approve_litres > 0 && totalLitres > policy.max_auto_approve_litres) {
+        policyViolations.push(
+          `Total composite order volume ${totalLitres.toFixed(1)}L exceeds tenant auto-approval limit of ${policy.max_auto_approve_litres}L`
         );
       }
 
@@ -308,12 +369,15 @@ export class ValioAimoRAGService {
 
     // Branch B: Single Item Procurement Flow (Backward-Compatible Standard RAG)
     const parsed = parseBuyerPrompt(prompt);
+    parsed.query = stripOperationalDirectives(parsed.query);
 
     // Step 1: Retrieval from Catalog (MariaDB / In-Memory Index)
-    const rawCandidates = this.catalog.search(parsed.query, {
-      limit: 8,
-      tags: parsed.attributes.length > 0 ? parsed.attributes : undefined,
-    });
+    const rawCandidates = parsed.query.length === 0
+      ? []
+      : this.catalog.search(parsed.query, {
+          limit: 8,
+          tags: parsed.attributes.length > 0 ? parsed.attributes : undefined,
+        });
 
     traces.push({
       step_number: 1,
@@ -450,7 +514,7 @@ export class ValioAimoRAGService {
       const match = candidateContexts.find((c) => c.product.id === activeLlmDecision.selectedSku);
       selected = match || candidateContexts[0];
       selectedPacks = activeLlmDecision.packsToOrder || selected.packsRequired;
-      selectedCost = activeLlmDecision.totalCostEur || Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
+      selectedCost = Number((selectedPacks * selected.catalogPriceEur).toFixed(2));
       aiExplanation = activeLlmDecision.reasoning;
       chainOfThought = activeLlmDecision.chainOfThought;
     } else {
@@ -556,6 +620,7 @@ export class ValioAimoRAGService {
       product: mockProduct,
       quote: mockQuote,
       existingOrders,
+      killswitchHalted: isKillswitchHalted,
     });
 
     if (substitutionRequest) {

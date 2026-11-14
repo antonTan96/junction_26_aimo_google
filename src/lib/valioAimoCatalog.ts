@@ -37,6 +37,11 @@ export function normalizeFinnishToken(token: string): string {
   if (t === 'keksiä' || t === 'keksejä' || t === 'keksit') return 'keksi';
   if (t === 'pikkuleipiä' || t === 'pikkuleivät') return 'pikkuleipä';
   if (t === 'pipareita' || t === 'piparit' || t === 'piparkakkuja') return 'piparkakku';
+  if (t === 'käsineet' || t === 'käsineitä') return 'käsine';
+  if (t === 'hanskat' || t === 'hanskoja') return 'hanska';
+  if (t === 'servetit' || t === 'servettejä') return 'servetti';
+  if (t === 'lautasliinat' || t === 'lautasliinoja') return 'lautasliina';
+  if (t === 'nenäliinat' || t === 'nenäliinoja') return 'nenäliina';
   if (t.length <= 4) return t;
 
   // Preserve abessive adjective ending -ton / -tön (e.g. laktoositon, rasvaton, gluteeniton, maidoton)
@@ -188,6 +193,9 @@ export const SYNONYM_GROUPS: string[][] = [
   ['bread', 'leipä', 'sämpylä', 'bröd'],
   ['sour cream', 'kermaviili', 'smetana', 'hapankerma', 'creme fraiche', 'crème fraîche', 'gräddfil'],
   ['pintadesinfektio', 'desinfektio', 'sanitizer', 'hygiene', 'disinfectant', 'easydes', 'hygienia'],
+  ['gloves', 'glove', 'käsine', 'käsineet', 'käsineitä', 'hanska', 'hanskat', 'hanskoja', 'kertakäyttökäsine', 'kertakäyttökäsineet', 'suojakäsine', 'suojakäsineet'],
+  ['napkin', 'napkins', 'servetti', 'servetit', 'servettejä', 'lautasliina', 'lautasliinat', 'lautasliinoja'],
+  ['hankie', 'hankies', 'tissue', 'tissues', 'nenäliina', 'nenäliinat', 'nenäliinoja', 'taskuliina', 'taskuliinat'],
 ];
 
 export const SYNONYMS: Record<string, string[]> = {};
@@ -263,9 +271,23 @@ export class ValioAimoCatalogService {
       if (raw.length > 0 && raw[0].display_name && raw[0].search_corpus) {
         this.products = raw;
         for (const item of this.products) {
-          // Normalize pack_volume_litres: if vol > 50 and the title indicates grams or millilitres (g, ml), divide by 1000 so 200g becomes 0.20L/kg and 3240g becomes 3.24L/kg
-          if (item.pack_volume_litres > 50) {
-            const titleLower = `${item.display_name} ${item.name_fi || ''}`.toLowerCase();
+          // Properly categorize non-food equipment & fresh produce first
+          item.category = this.categorizeProduct(
+            item.display_name || item.name_en,
+            item.name_fi || '',
+            item.dietary_tags || [],
+            item.vendor_name || ''
+          );
+
+          // BUG-10 (Non-food pack volume): Non-food piece goods (napkins, hankies, sheets) should not be assigned thousands of litres. Set to pack_volume_litres = 1.0.
+          const titleLower = `${item.display_name} ${item.name_fi || ''}`.toLowerCase();
+          const isPieceGood =
+            item.category === 'equipment' ||
+            /\b(?:napkin|napkins|hankie|hankies|sheet|sheets|tableskirt|tablecover|slipcover|towel|towels|gloves|servetti|servetit|servettejä|lautasliina|lautasliinat|annostelijaliina|nenäliina|nenäliinat|taskuliina|pöytäliina|kateliina|laskosliina|käsipyyhe|pyyhe|pefletti|käsine|käsineet|hanskat)\b/i.test(titleLower);
+
+          if (isPieceGood) {
+            item.pack_volume_litres = 1.0;
+          } else if (item.pack_volume_litres > 50) {
             if (
               /\b\d+\s*(?:g|gr|gram|grammaa|ml)\b/i.test(titleLower) ||
               /\d+g\b/i.test(titleLower) ||
@@ -276,14 +298,6 @@ export class ValioAimoCatalogService {
               item.pack_volume_litres = Number((item.pack_volume_litres / 1000.0).toFixed(3));
             }
           }
-
-          // Properly categorize non-food equipment & fresh produce
-          item.category = this.categorizeProduct(
-            item.display_name || item.name_en,
-            item.name_fi || '',
-            item.dietary_tags || [],
-            item.vendor_name || ''
-          );
 
           // Enrich product with normalized short tags (dietary, fat level, storage condition, culinary purpose)
           item.dietary_tags = enrichProductShortTags(
@@ -379,9 +393,19 @@ export class ValioAimoCatalogService {
       }
       if (isNaN(vol) || vol <= 0) vol = 1.0;
 
-      // Normalize pack_volume_litres: if vol > 50 and the title indicates grams or millilitres (g, ml), divide by 1000 so 200g becomes 0.20L/kg and 3240g becomes 3.24L/kg, preventing under-ordering and false volume policy triggers.
+      // Determine Category first
+      const category = this.categorizeProduct(displayName, fiName, tags, p.vendorName || '');
+
+      // Normalize pack_volume_litres:
+      // BUG-10: Non-food piece goods (napkins, hankies, sheets) should not be assigned thousands of litres. Set to 1.0.
       const titleLower = `${displayName} ${fiName}`.toLowerCase();
-      if (
+      const isPieceGood =
+        category === 'equipment' ||
+        /\b(?:napkin|napkins|hankie|hankies|sheet|sheets|tableskirt|tablecover|slipcover|towel|towels|gloves|servetti|servetit|servettejä|lautasliina|lautasliinat|annostelijaliina|nenäliina|nenäliinat|taskuliina|pöytäliina|kateliina|laskosliina|käsipyyhe|pyyhe|pefletti|käsine|käsineet|hanskat)\b/i.test(titleLower);
+
+      if (isPieceGood) {
+        vol = 1.0;
+      } else if (
         vol > 50 &&
         (/\b\d+\s*(?:g|gr|gram|grammaa|ml)\b/i.test(titleLower) ||
           /\d+g\b/i.test(titleLower) ||
@@ -391,9 +415,6 @@ export class ValioAimoCatalogService {
       ) {
         vol = vol / 1000.0;
       }
-
-      // Determine Category
-      const category = this.categorizeProduct(displayName, fiName, tags, p.vendorName || '');
 
       // Enrich product with normalized short tags (dietary, fat level, storage condition, culinary purpose)
       const enrichedTags = enrichProductShortTags(
@@ -493,7 +514,18 @@ export class ValioAimoCatalogService {
       text.includes('container') ||
       text.includes('mitta') ||
       text.includes('spatula') ||
-      text.includes('lasta')
+      text.includes('lasta') ||
+      text.includes('hankie') ||
+      text.includes('nenäliina') ||
+      text.includes('taskuliina') ||
+      text.includes('sheet') ||
+      text.includes('pöytäliina') ||
+      text.includes('kateliina') ||
+      text.includes('tablecover') ||
+      text.includes('slipcover') ||
+      text.includes('pefletti') ||
+      text.includes('hiuskiinne') ||
+      text.includes('hairspray')
     ) {
       return 'equipment';
     }
@@ -544,7 +576,13 @@ export class ValioAimoCatalogService {
         text.includes('hedelmä') ||
         text.includes('fruit') ||
         text.includes('vihannes') ||
-        text.includes('vegetable'))
+        text.includes('vegetable') ||
+        text.includes('parsa') ||
+        text.includes('asparagus') ||
+        text.includes('sugarsnap') ||
+        text.includes('sokeriherne') ||
+        text.includes('herne') ||
+        text.includes('pea'))
     ) {
       return 'produce';
     }
@@ -596,6 +634,13 @@ export class ValioAimoCatalogService {
       return 'bakery';
     }
 
+    // BUG-06 (Dairy taxonomy): In butter matching 'voi', do not match 'voimakas' (strong, hairspray, chorizo). Use word boundaries \b(?:voi|voita|butter|margariini|levite)\b and exclude voimakas.
+    const isButter =
+      !text.includes('hiuskiinne') &&
+      !text.includes('chorizo') &&
+      !/\bvoimakas\b/i.test(text) &&
+      /\b(?:voi|voita|butter|margariini|levite)\b/i.test(text);
+
     if (
       isIceCream ||
       text.includes('maito') ||
@@ -615,8 +660,7 @@ export class ValioAimoCatalogService {
       text.includes('grana padano') ||
       text.includes('feta') ||
       text.includes('emmental') ||
-      text.includes('voi') ||
-      text.includes('butter') ||
+      isButter ||
       text.includes('meijerivoi') ||
       text.includes('jogurtti') ||
       text.includes('yogurt') ||
@@ -643,46 +687,59 @@ export class ValioAimoCatalogService {
     ) {
       return 'beverages';
     }
+
+    // BUG-08 (Cleaning taxonomy): Do not use text.includes('clean') which matches produce 'CLEANED' (sugarsnaps). Use word boundaries \b(?:cleaner|cleaning|pesuaine|desinfiointi|sanitizer|puhdistusaine)\b.
     if (
-      text.includes('pesu') ||
-      text.includes('hygienia') ||
-      text.includes('hygiene') ||
-      text.includes('puhdistus') ||
-      text.includes('sanitizer') ||
-      text.includes('clean') ||
-      text.includes('saippua') ||
-      text.includes('detergent') ||
+      /\b(?:cleaner|cleaning|pesuaine|desinfiointi|sanitizer|puhdistusaine)\b/i.test(text) ||
       text.includes('pintadesinfektio') ||
       text.includes('desinfektio') ||
       text.includes('disinfectant') ||
-      text.includes('easydes')
+      text.includes('easydes') ||
+      text.includes('saippua') ||
+      text.includes('detergent') ||
+      text.includes('pesuaine') ||
+      text.includes('puhdistusaine') ||
+      text.includes('puhdistus') ||
+      text.includes('pesu') ||
+      text.includes('hygienia') ||
+      text.includes('hygiene')
     ) {
       return 'cleaning';
     }
-    if (
-      text.includes('liha') ||
-      text.includes('meat') ||
-      text.includes('kana') ||
-      text.includes('chicken') ||
-      text.includes('broileri') ||
-      text.includes('nauta') ||
-      text.includes('beef') ||
-      text.includes('possu') ||
-      text.includes('pork') ||
-      text.includes('makkara') ||
-      text.includes('atria') ||
-      text.includes('hkscan')
-    ) {
-      return 'meat';
+
+    // BUG-09 (Meat taxonomy): In chicken matching 'kana', check for eggs 'kananmuna' and egg pasta first before classifying as meat. Use word boundaries.
+    const isEggOrEggPasta =
+      text.includes('kananmuna') ||
+      text.includes('kananmunat') ||
+      text.includes('kananmunaa') ||
+      text.includes('munapasta') ||
+      text.includes('egg pasta') ||
+      text.includes('munanuudeli') ||
+      (/\b(?:egg|eggs)\b/i.test(text) && /\b(?:pasta|tagliatelle|noodle|noodles|nuudeli|spaghetti|spagetti|makaroni|macaroni)\b/i.test(text));
+
+    if (!isEggOrEggPasta) {
+      const isChicken = /\b(?:kana|kanaa|broileri|broiler|broileria|chicken)\b/i.test(text);
+      if (
+        isChicken ||
+        text.includes('liha') ||
+        text.includes('meat') ||
+        text.includes('nauta') ||
+        text.includes('beef') ||
+        text.includes('possu') ||
+        text.includes('pork') ||
+        text.includes('makkara') ||
+        text.includes('chorizo') ||
+        text.includes('atria') ||
+        text.includes('hkscan')
+      ) {
+        return 'meat';
+      }
     }
+
+    // BUG-07 (Alcohol taxonomy): In categorizeProduct(), do not use text.includes('alko') which matches 'valkoinen' (white asparagus, napkins, chocolate). Use regex word boundaries \b(?:alko|alkoholi|alcohol|viini|wine|olut|beer|siideri|lonkero|vodka|viski|whisky|rommi|gin)\b and explicitly exclude valkoinen.
     if (
-      text.includes('viini') ||
-      text.includes('wine') ||
-      text.includes('olut') ||
-      text.includes('beer') ||
-      text.includes('siideri') ||
-      text.includes('cider') ||
-      text.includes('alko')
+      !text.includes('valkoinen') &&
+      /\b(?:alko|alkoholi|alcohol|viini|wine|olut|beer|siideri|cider|lonkero|vodka|viski|whisky|rommi|gin)\b/i.test(text)
     ) {
       return 'alcohol';
     }
@@ -924,12 +981,15 @@ export class ValioAimoCatalogService {
         }
       }
 
-      // 2. For nitrile gloves, gloves or käsineet or hanskat is mandatory (do not match orange size)
+      // 2. For nitrile gloves, gloves or käsineet or hanskat is mandatory (do not match orange size or garlic cloves)
       if (hasGlovesIntent) {
         const matchesGloves =
           /\b(gloves?|käsine|käsineet|hanska|hanskat)\b/i.test(lowerDisplay) ||
           /\b(gloves?|käsine|käsineet|hanska|hanskat)\b/i.test(normalizedCorpus);
         if (!matchesGloves) continue;
+        if (p.category === 'produce' || lowerDisplay.includes('garlic') || lowerFi.includes('valkosipuli')) {
+          continue;
+        }
       }
 
       // 3. For parmesan cheese, require cheese terms and penalize non-food tools (slicer, dispenser, veitsi)

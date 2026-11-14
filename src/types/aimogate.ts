@@ -194,6 +194,7 @@ export interface RecurrentApprovalGrant {
   status: 'ACTIVE' | 'EXPIRED' | 'REVOKED';
   approved_by: string;
   notes: string | null;
+  period_start?: string | Date;
   created_at: string;
   is_valid: boolean;
   days_remaining: number;

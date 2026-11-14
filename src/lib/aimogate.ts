@@ -127,6 +127,17 @@ export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvalu
     const validUntil = new Date(g.valid_until);
     if (now < validFrom || now > validUntil) continue;
 
+    const periodStart = g.period_start ? new Date(g.period_start) : validFrom;
+    let periodMs = 7 * 86400_000;
+    if (g.frequency === 'DAILY') periodMs = 1 * 86400_000;
+    else if (g.frequency === 'WEEKLY') periodMs = 7 * 86400_000;
+    else if (g.frequency === 'MONTHLY') periodMs = 30 * 86400_000;
+
+    if (now.getTime() > periodStart.getTime() + periodMs) {
+      g.current_period_spent_eur = 0;
+      g.period_start = now.toISOString();
+    }
+
     const catMatch = g.category.toLowerCase() === product.category.toLowerCase() || g.category === '*';
     const skuMatch = g.sku === null || g.sku === quote.sku;
     if (catMatch && skuMatch) {
@@ -729,6 +740,7 @@ export class AimoGateStore {
       window_days: 14,
       max_budget_per_period_eur: 2500.0,
       current_period_spent_eur: 575.0,
+      period_start: twoDaysAgo,
       valid_from: twoDaysAgo,
       valid_until: twelveDaysLater,
       status: 'ACTIVE',
@@ -1434,6 +1446,7 @@ export class AimoGateStore {
         window_days: windowDays,
         max_budget_per_period_eur: budget,
         current_period_spent_eur: order.total_eur,
+        period_start: now.toISOString(),
         valid_from: now.toISOString(),
         valid_until: validUntil.toISOString(),
         status: 'ACTIVE',
@@ -1498,6 +1511,11 @@ export class AimoGateStore {
 
     order.status = 'REJECTED';
     order.approved_by = `REJECTED by ${principal.principal_id}`;
+    if (order.substitution_request) {
+      order.substitution_request.status = 'REJECTED';
+      order.substitution_request.decided_at = new Date().toISOString();
+      order.substitution_request.decided_by = `${principal.principal_id} (${principal.principal_type})`;
+    }
     quote.status = 'RELEASED';
 
     const stockRec = this.stock.get(quote.sku);
@@ -1532,6 +1550,10 @@ export class AimoGateStore {
     const order = this.orders.get(orderId);
     if (!order || (principal.principal_type !== 'admin' && order.tenant_id !== principal.tenant_id)) {
       throw new GatewayError(404, `Order '${orderId}' not found.`);
+    }
+
+    if (order.status !== 'PENDING_APPROVAL') {
+      throw new GatewayError(400, 'Cannot accept substitution on a non-pending order.');
     }
 
     if (!order.substitution_request || order.substitution_request.status !== 'PENDING') {
@@ -1616,6 +1638,10 @@ export class AimoGateStore {
     const order = this.orders.get(orderId);
     if (!order || (principal.principal_type !== 'admin' && order.tenant_id !== principal.tenant_id)) {
       throw new GatewayError(404, `Order '${orderId}' not found.`);
+    }
+
+    if (order.status !== 'PENDING_APPROVAL') {
+      throw new GatewayError(400, 'Cannot reject substitution on a non-pending order.');
     }
 
     if (!order.substitution_request || order.substitution_request.status !== 'PENDING') {
@@ -2018,6 +2044,17 @@ export class AimoGateStore {
       .map((g) => {
         const validUntil = new Date(g.valid_until);
         const validFrom = new Date(g.valid_from);
+        const periodStart = g.period_start ? new Date(g.period_start) : validFrom;
+        let periodMs = 7 * 86400_000;
+        if (g.frequency === 'DAILY') periodMs = 1 * 86400_000;
+        else if (g.frequency === 'WEEKLY') periodMs = 7 * 86400_000;
+        else if (g.frequency === 'MONTHLY') periodMs = 30 * 86400_000;
+
+        if (now.getTime() > periodStart.getTime() + periodMs) {
+          g.current_period_spent_eur = 0;
+          g.period_start = now.toISOString();
+        }
+
         const daysRemaining = Math.max(0, Math.ceil((validUntil.getTime() - now.getTime()) / 86400_000));
         const isValid = g.status === 'ACTIVE' && now >= validFrom && now <= validUntil;
         return { ...g, days_remaining: daysRemaining, is_valid: isValid };

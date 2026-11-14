@@ -75,7 +75,8 @@ export class GeminiClient {
 
   /**
    * Helper that attempts generation with current model, automatically falling back
-   * to active Gemini models (gemini-flash-latest, gemini-3.8-flash) if 404/NOT_FOUND is returned.
+   * to active Gemini models (gemini-flash-latest, gemini-3.8-flash) if 404/NOT_FOUND or timeout is returned.
+   * Uses Promise.race with an 8-10 second timeout so API hangs fail over to the next candidate model or deterministic engine.
    */
   private async generateContentWithFallback(params: {
     contents: string;
@@ -83,35 +84,81 @@ export class GeminiClient {
     temperature?: number;
   }) {
     if (!this.client) return null;
-    const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash'];
-    const uniqueModels = Array.from(new Set(candidateModels));
 
-    for (const model of uniqueModels) {
-      try {
-        const response = await this.client.models.generateContent({
-          model,
-          contents: params.contents,
-          config: {
-            systemInstruction: params.systemInstruction,
-            responseMimeType: 'application/json',
-            temperature: params.temperature ?? 0.1,
-          },
+    const executeModels = async () => {
+      const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash'];
+      const uniqueModels = Array.from(new Set(candidateModels));
+      const modelTimeoutMs = 8000;
+
+      for (const model of uniqueModels) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`[GeminiClient] Request timed out after ${modelTimeoutMs}ms for model ${model}`));
+          }, modelTimeoutMs);
+          if (typeof (timer as any)?.unref === 'function') {
+            (timer as any).unref();
+          }
         });
-        if (model !== this.model) {
-          console.log(`[GeminiClient] Automatically switched active model to: ${model}`);
-          this.model = model;
-        }
-        return response;
-      } catch (err: any) {
-        const msg = String(err?.message || '');
-        if (msg.includes('404') || msg.includes('NOT_FOUND') || msg.includes('no longer available')) {
-          console.warn(`[GeminiClient] Model '${model}' unavailable (${msg.slice(0, 100)}...), trying fallback...`);
+
+        try {
+          const callPromise = this.client!.models.generateContent({
+            model,
+            contents: params.contents,
+            config: {
+              systemInstruction: params.systemInstruction,
+              responseMimeType: 'application/json',
+              temperature: params.temperature ?? 0.1,
+            },
+          });
+
+          const response = await Promise.race([callPromise, timeoutPromise]);
+          clearTimeout(timer);
+
+          if (model !== this.model) {
+            console.log(`[GeminiClient] Automatically switched active model to: ${model}`);
+            this.model = model;
+          }
+          return response;
+        } catch (err: any) {
+          clearTimeout(timer);
+          const msg = String(err?.message || '');
+          if (
+            msg.includes('timed out') ||
+            msg.includes('404') ||
+            msg.includes('NOT_FOUND') ||
+            msg.includes('no longer available') ||
+            msg.includes('RESOURCE_EXHAUSTED') ||
+            msg.includes('503') ||
+            msg.includes('overloaded')
+          ) {
+            console.warn(`[GeminiClient] Model '${model}' unavailable or timed out (${msg.slice(0, 100)}...), trying fallback...`);
+            continue;
+          }
+          console.warn(`[GeminiClient] Model '${model}' error (${msg.slice(0, 100)}...), trying fallback...`);
           continue;
         }
-        throw err;
       }
+      return null;
+    };
+
+    let overallTimer: ReturnType<typeof setTimeout> | undefined;
+    const overallTimeoutMs = 9500;
+    const overallTimeoutPromise = new Promise<null>((resolve) => {
+      overallTimer = setTimeout(() => {
+        console.warn(`[GeminiClient] Total generateContentWithFallback timed out after ${overallTimeoutMs}ms, falling back.`);
+        resolve(null);
+      }, overallTimeoutMs);
+      if (typeof (overallTimer as any)?.unref === 'function') {
+        (overallTimer as any).unref();
+      }
+    });
+
+    try {
+      return await Promise.race([executeModels(), overallTimeoutPromise]);
+    } finally {
+      clearTimeout(overallTimer);
     }
-    return null;
   }
 
   /**
