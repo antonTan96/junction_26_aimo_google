@@ -42,10 +42,13 @@ function resolvePrincipal(req: Request): Principal {
   if (parts.length >= 3 && parts[0] === 'aimo') {
     const role = parts[1] as PrincipalType;
     const tokenTenant = parts.slice(2).join('.') || DEFAULT_TENANT_ID;
-    if (queryTenant && queryTenant !== tokenTenant) {
-      throw new GatewayError(403, 'Cross-tenant impersonation forbidden.');
+    if (role === 'admin') {
+      return store.engine.getPresetPrincipal('admin', queryTenant || tokenTenant);
     }
-    if (role === 'agent' || role === 'human' || role === 'admin') {
+    if (queryTenant && queryTenant !== tokenTenant) {
+      throw new GatewayError(403, `Cross-tenant access forbidden. Token belongs to '${tokenTenant}'.`);
+    }
+    if (role === 'agent' || role === 'human') {
       return store.engine.getPresetPrincipal(role, tokenTenant);
     }
   }
@@ -74,36 +77,6 @@ export async function createApp() {
 
   const api = express.Router();
 
-  // Guard /api/v1/policies/killswitch, /api/v1/admin/*, and /demo/* endpoints with requirePrincipal(principal, ['admin'])
-  api.use('/admin', (req, res, next) => {
-    try {
-      const principal = resolvePrincipal(req);
-      requirePrincipal(principal, ['admin']);
-      next();
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  api.use('/demo', (req, res, next) => {
-    try {
-      const principal = resolvePrincipal(req);
-      requirePrincipal(principal, ['admin']);
-      next();
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  api.use('/policies/killswitch', (req, res, next) => {
-    try {
-      const principal = resolvePrincipal(req);
-      requirePrincipal(principal, ['admin']);
-      next();
-    } catch (err) {
-      next(err);
-    }
-  });
 
   // Health & Gateway Root
   app.get('/health', (_req, res) => {
