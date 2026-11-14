@@ -565,11 +565,18 @@ export function deduceRecipeFromOntology(
  * Parse an explicit multi-material or comma-separated recipe string.
  */
 export function parseExplicitMaterialList(text: string, dietaryTags: string[] = []): DecomposedIngredient[] {
-  // Strip meta phrases before splitting, so "Find an option based on price and availability" does not create false items
-  const cleanInput = text
-    .replace(/\b(?:find\s+an\s+option|check\s+(?:price|availability)|based\s+on\s+(?:price|availability)).*$/gi, '')
+  // Strip enclosing quotes and clean input
+  let cleanInput = text
+    .replace(/^["'“”«»]+|["'“”«»]+$/g, '')
+    .trim();
+
+  // Strip meta phrases, delivery timing, and agent instructions before splitting
+  cleanInput = cleanInput
+    .replace(/\b(?:check|verify|lookup)\s+(?:fixed\s+)?(?:contract\s+)?(?:prices?|pricing|availability|stock).*$/gi, '')
+    .replace(/\b(?:lock\s+(?:the\s+)?quote|commit\s+(?:the\s+)?order|if\s+it\s+complies\s+with\s+(?:our\s+)?(?:autonomous\s+)?(?:purchasing\s+)?rules).*$/gi, '')
+    .replace(/\b(?:find\s+an\s+option|based\s+on\s+(?:price|availability)).*$/gi, '')
     .replace(/\bhinnan\s+ja\s+saatavuuden\s+mukaan.*$/gi, '')
-    .replace(/\b(?:by|before|until)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap).*$/gi, '')
+    .replace(/\b(?:by|before|until|for)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?.*$/gi, '')
     .replace(/(\d+),(\d{3})\b/g, '$1$2')
     .replace(/^(?:recipe\s+for\s+[^:,\n]+[:,\-]|resepti\s*:\s*|ingredients\s*:\s*|ainekset\s*:\s*)/i, '')
     .trim();
@@ -577,7 +584,7 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
   // Split on "and", "plus", "sekä", "ja", semicolons, commas preceding numbers or quantities, or newlines
   const segments = cleanInput
     .split(/\n+|;\s*|\s+(?:and|plus|sekä|ja)\s+|,\s*(?=\d|\ban?\b|\bsome\b)/i)
-    .map((s) => s.trim())
+    .map((s) => s.replace(/^["'“”«»]+|["'“”«»]+$/g, '').trim())
     .filter(Boolean);
 
   const items: DecomposedIngredient[] = [];
@@ -585,12 +592,15 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
   for (let seg of segments) {
     seg = seg
       .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme)\s+/gi, '')
+      .replace(/^["'“”«»]+|["'“”«»]+$/g, '')
       .trim();
 
     // Quantity regex: e.g. "50 liters of organic whole milk", "10kg butter", "20 boxes croissants"
     const volMatch = seg.match(/^([\d,]+(?:\.\d+)?)\s*(l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?)\b\s*(?:of\s+)?(.*)$/i);
     const gramMatch = seg.match(/^([\d,]+(?:\.\d+)?)\s*(g|gram|grams|grammaa?)\b\s*(?:of\s+)?(.*)$/i);
     const qtyMatch = seg.match(/^([\d,]+)\s*(kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|croissants?|cases?|cartons?)\b\s*(?:of\s+)?(.*)$/i);
+    // Trailing quantity match: e.g. "unsalted butter (15 kg)" or "unsalted butter 15kg"
+    const trailingMatch = seg.match(/^(.*?)\s*[\(\[]?\s*([\d,]+(?:\.\d+)?)\s*(l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?|boxes?|packs?|units?)\s*[\)\]]?$/i);
 
     let qty = 1;
     let unit = 'units';
@@ -608,6 +618,10 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
       qty = parseFloat(qtyMatch[1].replace(/,/g, ''));
       unit = normalizeUnit(qtyMatch[2]);
       itemName = qtyMatch[3] || seg;
+    } else if (trailingMatch && trailingMatch[1].trim().length > 0) {
+      qty = parseFloat(trailingMatch[2].replace(/,/g, ''));
+      unit = normalizeUnit(trailingMatch[3]);
+      itemName = trailingMatch[1].trim();
     } else {
       // Standalone number prefix like "50 salmon fillet"
       const numMatch = seg.match(/^([\d,]+)\s+(.*)$/);
@@ -619,11 +633,19 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
 
     const cleanItem = itemName
       .replace(/\bfor\s+(?:the\s+)?(?:bakery|kitchen|cafeteria|breakfast|event)\b/gi, '')
+      .replace(/\b(?:for\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)(?:\s+(?:morning|afternoon|evening))?(?:\s+delivery)?\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
 
-    const stopWords = /^(?:availability|price|saatavuus|hinta|option|options|requirement|requirements|asap|friday|monday|thursday|tuesday|wednesday|saturday|sunday)$/i;
-    if (!cleanItem || stopWords.test(cleanItem)) continue;
+    const stopWords = /^(?:availability|price|pricing|saatavuus|hinta|option|options|requirement|requirements|asap|friday|monday|thursday|tuesday|wednesday|saturday|sunday|quote|order|lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules)$/i;
+    if (
+      !cleanItem ||
+      cleanItem.length < 2 ||
+      stopWords.test(cleanItem) ||
+      /\b(?:lock\s+the\s+quote|commit\s+the\s+order|purchasing\s+rules|check\s+fixed|contract\s+prices?)\b/i.test(cleanItem)
+    ) {
+      continue;
+    }
 
     // Detect category hint
     let catHint = 'dairy';
@@ -662,6 +684,13 @@ export function parseExplicitMaterialList(text: string, dietaryTags: string[] = 
   return items;
 }
 
+export function calculateDefaultDeliverBy(now: Date = new Date()): string {
+  const weekday = now.getUTCDay(); // 0=Sun, 1=Mon
+  let daysAhead = (1 - weekday + 7) % 7;
+  if (daysAhead <= 1) daysAhead += 7;
+  return new Date(now.getTime() + daysAhead * 86400_000 + 8 * 3600_000).toISOString();
+}
+
 /**
  * Preprocess natural language buyer prompts synchronously into structured procurement items,
  * identifying recipes, deducing necessary raw materials, and scaling quantities deterministically.
@@ -672,12 +701,7 @@ export function preprocessBuyerPromptSync(
 ): PreprocessedPromptResult {
   const tLower = prompt.toLowerCase();
   const dietaryTags = extractShortTags(prompt);
-
-  // Calculate standard delivery date
-  const weekday = now.getUTCDay(); // 0=Sun, 1=Mon
-  let daysAhead = (1 - weekday + 7) % 7;
-  if (daysAhead <= 1) daysAhead += 7;
-  const deliverBy = new Date(now.getTime() + daysAhead * 86400_000 + 8 * 3600_000).toISOString();
+  const deliverBy = calculateDefaultDeliverBy(now);
 
   // 1. Identify if prompt contains a known recipe from the culinary ontology
   let matchedRecipeKey: string | null = null;
@@ -827,49 +851,80 @@ export async function preprocessBuyerPrompt(
   prompt: string,
   now: Date = new Date()
 ): Promise<PreprocessedPromptResult> {
+  const tLower = prompt.toLowerCase();
+
+  // 1. Google Gemini 2.5 Inference for custom recipes & multi-item natural language extraction
+  if (process.env.DISABLE_REMOTE_LLM !== 'true') {
+    try {
+      const gemini = GeminiClient.getInstance();
+      if (gemini.isAvailable()) {
+        if (tLower.includes('recipe') || tLower.includes('ingredients for') || tLower.includes('ainekset')) {
+          const geminiRecipe = await gemini.deduceRecipe(prompt);
+          if (geminiRecipe && geminiRecipe.raw_ingredients && geminiRecipe.raw_ingredients.length > 0) {
+            const deliverBy = calculateDefaultDeliverBy(now);
+            return {
+              raw_prompt: prompt,
+              request_type: 'recipe',
+              recipe: {
+                name: geminiRecipe.recipe_name,
+                servings_or_yield: geminiRecipe.servings_or_yield,
+                yield_unit: geminiRecipe.yield_unit,
+                cuisine: 'Nordic / International Commercial Kitchen',
+              },
+              dietary_tags: geminiRecipe.dietary_tags || [],
+              deliver_by: deliverBy,
+              items: geminiRecipe.raw_ingredients.map((ing) => ({
+                ingredient_name: ing.ingredient_name,
+                search_query: ing.search_query || ing.ingredient_name,
+                quantity: ing.quantity,
+                unit: ing.unit,
+                category_hint: ing.category_hint || 'general',
+                dietary_tags: ing.dietary_tags || [],
+                importance: (ing.importance === 'optional' ? 'optional' : 'essential') as 'essential' | 'optional' | 'substitute',
+                culinary_role: ing.culinary_role || 'Commercial ingredient',
+              })),
+              notes: `Recipe deduced via Google Gemini (${gemini.getModelName()}): ${geminiRecipe.preparation_notes || 'Scaled for commercial batch.'}`,
+            };
+          }
+        }
+
+        // Multi-item extraction via Google Gemini 2.5
+        const extracted = await gemini.extractProcurementItems(prompt);
+        if (extracted && extracted.length > 1) {
+          const deliverBy = calculateDefaultDeliverBy(now);
+          const dietaryTags = extractShortTags(prompt);
+          return {
+            raw_prompt: prompt,
+            request_type: 'multi_item',
+            dietary_tags: dietaryTags,
+            deliver_by: deliverBy,
+            items: extracted.map((item) => ({
+              ingredient_name: item.ingredient_name,
+              search_query: item.search_query,
+              quantity: item.quantity,
+              unit: item.unit,
+              category_hint: item.category_hint,
+              dietary_tags: item.dietary_tags,
+              importance: item.importance as 'essential' | 'optional',
+              culinary_role: 'Procurement line item',
+            })),
+            notes: `Extracted ${extracted.length} procurement line items via Google Gemini (${gemini.getModelName()}).`,
+          };
+        }
+      }
+    } catch {
+      // Fallback gracefully
+    }
+  }
+
   const syncResult = preprocessBuyerPromptSync(prompt, now);
   if (syncResult.request_type !== 'single_item') {
     return syncResult;
   }
 
-  const tLower = prompt.toLowerCase();
-  // 1. Optional Google Gemini 2.5 Inference for custom/uncataloged recipes
-  if (
-    process.env.DISABLE_REMOTE_LLM !== 'true' &&
-    (tLower.includes('recipe') || tLower.includes('ingredients for') || tLower.includes('ainekset'))
-  ) {
+  // 2. Fallback to Nemotron if Gemini is not configured
+  if (process.env.DISABLE_REMOTE_LLM !== 'true') {
     try {
-      const gemini = GeminiClient.getInstance();
-      if (gemini.isAvailable()) {
-        const geminiRecipe = await gemini.deduceRecipe(prompt);
-        if (geminiRecipe && geminiRecipe.raw_ingredients && geminiRecipe.raw_ingredients.length > 0) {
-          return {
-            raw_prompt: prompt,
-            request_type: 'recipe',
-            recipe: {
-              name: geminiRecipe.recipe_name,
-              servings_or_yield: geminiRecipe.servings_or_yield,
-              yield_unit: geminiRecipe.yield_unit,
-              cuisine: 'Nordic / International Commercial Kitchen',
-            },
-            dietary_tags: geminiRecipe.dietary_tags || [],
-            deliver_by: syncResult.deliver_by,
-            items: geminiRecipe.raw_ingredients.map((ing) => ({
-              ingredient_name: ing.ingredient_name,
-              search_query: ing.search_query || ing.ingredient_name,
-              quantity: ing.quantity,
-              unit: ing.unit,
-              category_hint: ing.category_hint || 'general',
-              dietary_tags: ing.dietary_tags || [],
-              importance: (ing.importance === 'optional' ? 'optional' : 'essential') as 'essential' | 'optional' | 'substitute',
-              culinary_role: ing.culinary_role || 'Commercial ingredient',
-            })),
-            notes: `Recipe deduced via Google Gemini (${gemini.getModelName()}): ${geminiRecipe.preparation_notes || 'Scaled for commercial batch.'}`,
-          };
-        }
-      }
-
-      // 2. Fallback to Nemotron if Gemini is not configured
       const nemotron = NemotronClient.getInstance();
       const llmResult = await queryNemotronForRecipe(prompt, nemotron);
       if (llmResult && llmResult.items && llmResult.items.length > 0) {

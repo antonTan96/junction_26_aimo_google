@@ -162,6 +162,83 @@ Select the optimal SKU and return JSON.`;
   }
 
   /**
+   * Natural Language Procurement Intent Extraction:
+   * Extracts distinct procurement line items (name, quantity, unit, category hint)
+   * while filtering out meta-instructions (check price, lock quote, commit order, etc.).
+   */
+  public async extractProcurementItems(prompt: string): Promise<Array<{
+    ingredient_name: string;
+    search_query: string;
+    quantity: number;
+    unit: string;
+    category_hint: string;
+    dietary_tags: string[];
+    importance: 'essential' | 'optional';
+  }> | null> {
+    if (!this.isAvailable() || !this.client) {
+      return null;
+    }
+
+    const systemInstruction = `You are an expert commercial procurement analyst for Valio Aimo food wholesaler.
+Extract ONLY the actual food, beverage, or kitchen supply products to purchase from the user prompt.
+Extract metric quantities (L, kg, boxes, units, etc.) for each item.
+CRITICAL: Completely IGNORE and DO NOT extract operational instructions, meta-commands, or constraints such as:
+- "check fixed contract prices", "check availability", "check price"
+- "lock the quote", "commit the order", "if it complies with our autonomous purchasing rules"
+- "for Tuesday morning delivery", "by Friday"
+
+Return strictly valid JSON conforming to this schema:
+{
+  "items": [
+    {
+      "ingredient_name": string,
+      "search_query": string,
+      "quantity": number,
+      "unit": "L" | "kg" | "boxes" | "units" | "packs",
+      "category_hint": "dairy" | "bakery" | "produce" | "meat" | "beverages" | "plant-based" | "cleaning",
+      "dietary_tags": string[],
+      "importance": "essential" | "optional"
+    }
+  ]
+}`;
+
+    try {
+      const response = await this.client.models.generateContent({
+        model: this.model,
+        contents: `Extract the physical procurement line items to purchase from this prompt: "${prompt}"`,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+          temperature: 0.1,
+        },
+      });
+
+      const text = response.text?.trim() || '';
+      if (!text) return null;
+
+      const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+      const parsed = JSON.parse(cleanJson);
+
+      if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+        return null;
+      }
+
+      return parsed.items.map((item: any) => ({
+        ingredient_name: String(item.ingredient_name || ''),
+        search_query: String(item.search_query || item.ingredient_name || ''),
+        quantity: Number(item.quantity) || 1,
+        unit: String(item.unit || 'units'),
+        category_hint: String(item.category_hint || 'dairy'),
+        dietary_tags: Array.isArray(item.dietary_tags) ? item.dietary_tags.map(String) : [],
+        importance: item.importance === 'optional' ? ('optional' as const) : ('essential' as const),
+      }));
+    } catch (err) {
+      console.warn(`[GeminiClient] Intent extraction notice (${(err as Error).message}), falling back to regex parser.`);
+      return null;
+    }
+  }
+
+  /**
    * Culinary Recipe Deduction & Scaling:
    * Deduces raw culinary ingredients, calculates scaled quantities, and maps dietary substitutions.
    */
