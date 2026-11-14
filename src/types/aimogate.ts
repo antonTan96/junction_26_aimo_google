@@ -429,9 +429,8 @@ export interface NetworkOverview {
 }
 
 export type NavSectionId =
-  | 'stage-demo'
-  | 'procurement-guardrails'
   | 'autonomous-prompt-scheduler'
+  | 'procurement-guardrails'
   | 'safety-and-budget-limits'
   | 'audit-and-agent-logs';
 

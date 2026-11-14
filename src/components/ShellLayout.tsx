@@ -14,7 +14,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Store,
-  Zap,
 } from 'lucide-react';
 import type {
   CustomerRosterItem,
@@ -43,9 +42,8 @@ const NAV_ITEMS: Array<{
   icon: React.ComponentType<{ className?: string }>;
   flagship?: boolean;
 }> = [
-  { id: 'stage-demo', label: '3-Pane Stage Demo', icon: Zap, flagship: true },
+  { id: 'autonomous-prompt-scheduler', label: 'Orders & Approvals', icon: ShoppingBag, flagship: true },
   { id: 'procurement-guardrails', label: 'Allowed Items', icon: CheckSquare },
-  { id: 'autonomous-prompt-scheduler', label: 'Orders & Approvals', icon: ShoppingBag },
   { id: 'safety-and-budget-limits', label: 'Spending Limits', icon: Sliders },
   { id: 'audit-and-agent-logs', label: 'Order History', icon: ReceiptText },
 ];
@@ -133,7 +131,7 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
             const Icon = item.icon;
             const active = activeNav === item.id;
             const showBadge =
-              (item.id === 'autonomous-prompt-scheduler' || item.id === 'stage-demo') &&
+              item.id === 'autonomous-prompt-scheduler' &&
               pendingOrders.length > 0;
 
             return (
