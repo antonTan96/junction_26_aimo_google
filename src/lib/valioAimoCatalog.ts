@@ -93,93 +93,121 @@ export class ValioAimoCatalogService {
         return;
       }
 
-      for (const p of raw) {
-        if (p.deleted) continue;
-        const synkka = p.synkkaData || {};
-        const names = synkka.names || [];
-        const fiName = names.find((n: any) => n.language === 'fi')?.value || `Tuote ${p.id}`;
-        const enName = names.find((n: any) => n.language === 'en')?.value || fiName;
-        const svName = names.find((n: any) => n.language === 'sv')?.value || fiName;
-        const displayName = enName || fiName;
-
-        const tags: string[] = [];
-        synkka.classifications?.forEach((c: any) =>
-          c.values?.forEach((v: any) => {
-            if (v.id) tags.push(v.id.toLowerCase());
-          })
-        );
-
-        const lowerAll = `${displayName} ${fiName}`.toLowerCase();
-        if (tags.includes('free_from_lactose') || lowerAll.includes('lactose free') || lowerAll.includes('laktoositon')) {
-          tags.push('lactose-free');
-        }
-        if (tags.includes('free_from_gluten') || lowerAll.includes('gluten free') || lowerAll.includes('gluteeniton')) {
-          tags.push('gluten-free');
-        }
-        if (tags.includes('vegan') || lowerAll.includes('vegan') || lowerAll.includes('vegaani')) {
-          tags.push('vegan');
-        }
-        if (tags.includes('vegetarian') || lowerAll.includes('kasvis')) {
-          tags.push('vegetarian');
-        }
-
-        // Derive pack volume in litres or kg
-        let vol = 1.0;
-        const unitConversions = synkka.unitConversions || [];
-        for (const uc of unitConversions) {
-          if (uc.volume && uc.volume.value) {
-            vol = parseFloat(uc.volume.value);
-            break;
-          } else if (uc.netWeight && uc.netWeight.value) {
-            vol = parseFloat(uc.netWeight.value);
-            break;
-          }
-        }
-        if (isNaN(vol) || vol <= 0) vol = 1.0;
-
-        // Determine Category
-        const category = this.categorizeProduct(displayName, fiName, tags, p.vendorName || '');
-
-        // Pack format formatting
-        let packFormat = p.salesUnit || 'PCE';
-        const lowerName = displayName.toLowerCase();
-        if (lowerName.includes('10 l') || lowerName.includes('10l')) packFormat = '10L Bag-in-Box';
-        else if (lowerName.includes('12x1l') || lowerName.includes('12 x 1l')) packFormat = '12x1L Carton';
-        else if (lowerName.includes('5 l') || lowerName.includes('5l')) packFormat = '5L Canister';
-        else if (lowerName.includes('1 l') || lowerName.includes('1l')) packFormat = '1L Carton';
-        else if (lowerName.includes('500 g') || lowerName.includes('500g')) packFormat = '500g Pack';
-        else if (vol > 1) packFormat = `${vol}L Unit`;
-
-        const corpus = `${displayName} ${fiName} ${svName} ${p.vendorName || ''} ${synkka.brand || ''} ${tags.join(' ')}`.toLowerCase();
-
-        const item: CatalogProduct = {
-          id: String(p.id),
-          gtin: p.salesUnitGtin || synkka.gtin || '',
-          name_fi: fiName,
-          name_en: enName,
-          name_sv: svName,
-          display_name: displayName,
-          vendor_name: p.vendorName || 'Valio Aimo',
-          brand: synkka.brand || 'Valio',
-          category,
-          dietary_tags: tags,
-          pack_format: packFormat,
-          pack_volume_litres: Number(vol.toFixed(3)),
-          temperature_condition: p.temperatureCondition || 4,
-          search_corpus: corpus,
-          is_active: !p.deleted,
-        };
-
-        this.products.push(item);
-        this.productMap.set(item.id, item);
-      }
-
+      this.parseRawProducts(raw);
       this.isLoaded = true;
     } catch (err) {
       console.warn('Could not load full Valio Aimo catalog JSON, falling back to built-in staple list:', err);
       this.loadBuiltinCatalog();
       this.isLoaded = true;
     }
+  }
+
+  public parseRawProducts(raw: any[]): void {
+    this.products = [];
+    this.productMap.clear();
+
+    for (const p of raw) {
+      if (p.deleted) continue;
+      const synkka = p.synkkaData || {};
+      const names = synkka.names || [];
+      const fiName = names.find((n: any) => n.language === 'fi')?.value || `Tuote ${p.id}`;
+      const enName = names.find((n: any) => n.language === 'en')?.value || fiName;
+      const svName = names.find((n: any) => n.language === 'sv')?.value || fiName;
+      const displayName = enName || fiName;
+
+      const tags: string[] = [];
+      synkka.classifications?.forEach((c: any) =>
+        c.values?.forEach((v: any) => {
+          if (v.id) tags.push(v.id.toLowerCase());
+        })
+      );
+
+      const lowerAll = `${displayName} ${fiName}`.toLowerCase();
+      if (tags.includes('free_from_lactose') || lowerAll.includes('lactose free') || lowerAll.includes('laktoositon')) {
+        tags.push('lactose-free');
+      }
+      if (tags.includes('free_from_gluten') || lowerAll.includes('gluten free') || lowerAll.includes('gluteeniton')) {
+        tags.push('gluten-free');
+      }
+      if (tags.includes('vegan') || lowerAll.includes('vegan') || lowerAll.includes('vegaani')) {
+        tags.push('vegan');
+      }
+      if (tags.includes('vegetarian') || lowerAll.includes('kasvis')) {
+        tags.push('vegetarian');
+      }
+
+      // Derive pack volume in litres or kg
+      let vol = 1.0;
+      const unitConversions = synkka.unitConversions || [];
+      for (const uc of unitConversions) {
+        if (uc.volume && uc.volume.value) {
+          vol = parseFloat(uc.volume.value);
+          break;
+        } else if (uc.netWeight && uc.netWeight.value) {
+          vol = parseFloat(uc.netWeight.value);
+          break;
+        }
+      }
+      if (isNaN(vol) || vol <= 0) vol = 1.0;
+
+      // Determine Category
+      const category = this.categorizeProduct(displayName, fiName, tags, p.vendorName || '');
+
+      // Pack format formatting
+      let packFormat = p.salesUnit || 'PCE';
+      const lowerName = displayName.toLowerCase();
+      if (lowerName.includes('10 l') || lowerName.includes('10l')) packFormat = '10L Bag-in-Box';
+      else if (lowerName.includes('12x1l') || lowerName.includes('12 x 1l')) packFormat = '12x1L Carton';
+      else if (lowerName.includes('5 l') || lowerName.includes('5l')) packFormat = '5L Canister';
+      else if (lowerName.includes('1 l') || lowerName.includes('1l')) packFormat = '1L Carton';
+      else if (lowerName.includes('500 g') || lowerName.includes('500g')) packFormat = '500g Pack';
+      else if (vol > 1) packFormat = `${vol}L Unit`;
+
+      const corpus = `${displayName} ${fiName} ${svName} ${p.vendorName || ''} ${synkka.brand || ''} ${tags.join(' ')}`.toLowerCase();
+
+      const item: CatalogProduct = {
+        id: String(p.id),
+        gtin: p.salesUnitGtin || synkka.gtin || '',
+        name_fi: fiName,
+        name_en: enName,
+        name_sv: svName,
+        display_name: displayName,
+        vendor_name: p.vendorName || 'Valio Aimo',
+        brand: synkka.brand || 'Valio',
+        category,
+        dietary_tags: tags,
+        pack_format: packFormat,
+        pack_volume_litres: Number(vol.toFixed(3)),
+        temperature_condition: p.temperatureCondition || 4,
+        search_corpus: corpus,
+        is_active: !p.deleted,
+      };
+
+      this.products.push(item);
+      this.productMap.set(item.id, item);
+    }
+  }
+
+  public async pullFromUpstream(): Promise<number> {
+    try {
+      console.log('[ValioAimoCatalog] Pulling catalog from Valio Aimo API (/api/products/download)...');
+      const res = await fetch(`${UPSTREAM_API_BASE}/api/products/download`, {
+        headers: { 'X-API-Key': UPSTREAM_API_KEY },
+        redirect: 'follow',
+      });
+      if (res.ok) {
+        const raw = (await res.json()) as any[];
+        if (Array.isArray(raw) && raw.length > 0) {
+          this.parseRawProducts(raw);
+          this.isLoaded = true;
+          console.log(`[ValioAimoCatalog] Successfully indexed ${this.products.length} products from upstream API.`);
+          return this.products.length;
+        }
+      }
+    } catch (err: any) {
+      console.warn('[ValioAimoCatalog] Upstream pull error:', err.message);
+    }
+    return this.products.length;
   }
 
   private categorizeProduct(nameEn: string, nameFi: string, tags: string[], vendor: string): string {

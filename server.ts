@@ -470,6 +470,19 @@ async function startServer() {
     })
   );
 
+  api.post(
+    '/catalog/sync',
+    asyncHandler(async (_req, res) => {
+      const service = ValioAimoCatalogService.getInstance();
+      const count = await service.pullFromUpstream();
+      res.json({
+        status: 'ok',
+        catalog_items: count,
+        source: 'https://junction26.valioaimo.fi/api/products/download',
+      });
+    })
+  );
+
   // --- Wholesaler Tower Admin Routes ---
   api.get(
     '/admin/overview',
@@ -593,6 +606,14 @@ async function startServer() {
   const PORT = Number(process.env.PORT || 3000);
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`AimoGate server running on http://0.0.0.0:${PORT} (MCP: /mcp)`);
+
+    // Ensure full catalog is loaded; if falling back to 8 staples, auto-pull full 17,546 catalog from upstream
+    const catalog = ValioAimoCatalogService.getInstance();
+    catalog.ensureLoaded();
+    if (catalog.getProductCount() < 100) {
+      console.log('[Startup] Catalog contains < 100 items; auto-pulling full 17,546 catalog from Valio Aimo API...');
+      catalog.pullFromUpstream().catch((err) => console.warn('[Startup] Catalog auto-pull notice:', err.message));
+    }
   });
 }
 
