@@ -139,7 +139,9 @@ export class ValioAimoRAGService {
     const traces: AgentStepTrace[] = [];
 
     // Adversarial System Override Probe -> Intercepted by Policy Firewall
-    const isAdversarial = /\b(?:system\s+override|ignore\s+(?:spend\s+)?limits|bypass\s+policy|override\s+policy)\b/i.test(prompt);
+    const isAdversarial =
+      Boolean(preprocessed.is_adversarial_probe) ||
+      /\b(?:system\s+override|ignore\s+(?:spend\s+)?limits|bypass\s+policy|override\s+policy|disregard\s+previous\s+instructions)\b/i.test(prompt);
     if (isAdversarial) {
       const eurMatch = prompt.match(/€\s*([\d,]+(?:\.\d+)?)|([\d,]+(?:\.\d+)?)\s*€/);
       const attemptedCost = eurMatch ? parseFloat((eurMatch[1] || eurMatch[2]).replace(/,/g, '')) : 4500.0;
@@ -645,20 +647,20 @@ export class ValioAimoRAGService {
     const parsed = parseBuyerPrompt(prompt);
     parsed.query = stripOperationalDirectives(parsed.query);
 
-    if (
-      parsed.query === 'lactose-free milk' &&
-      !prompt.toLowerCase().includes('milk') &&
-      !prompt.toLowerCase().includes('dairy') &&
-      !prompt.toLowerCase().includes('maito')
-    ) {
-      if (preprocessed.items && preprocessed.items.length > 0) {
-        const singleItem = preprocessed.items[0];
-        if (singleItem) {
-          if (singleItem.search_query) parsed.query = singleItem.search_query;
-          if (singleItem.quantity && singleItem.quantity > 0) parsed.volume_litres = singleItem.quantity;
-          if (singleItem.dietary_tags && singleItem.dietary_tags.length > 0) {
-            parsed.attributes = Array.from(new Set([...parsed.attributes, ...singleItem.dietary_tags]));
-          }
+    if (preprocessed.items && preprocessed.items.length === 1 && preprocessed.items[0].search_query) {
+      const singleItem = preprocessed.items[0];
+      if (
+        (parsed.query === 'lactose-free milk' &&
+          !prompt.toLowerCase().includes('milk') &&
+          !prompt.toLowerCase().includes('dairy') &&
+          !prompt.toLowerCase().includes('maito')) ||
+        parsed.volume_litres === 1000.0 ||
+        singleItem.search_query.length > 0
+      ) {
+        parsed.query = singleItem.search_query;
+        if (singleItem.quantity && singleItem.quantity > 0) parsed.volume_litres = singleItem.quantity;
+        if (singleItem.dietary_tags && singleItem.dietary_tags.length > 0) {
+          parsed.attributes = Array.from(new Set([...parsed.attributes, ...singleItem.dietary_tags]));
         }
       }
     }

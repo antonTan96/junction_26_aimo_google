@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { GatewayError } from './aimogate.ts';
+import { preprocessBuyerPrompt } from './promptPreprocessor.ts';
 import type { PersistentAimoGateStore } from './firestoreStore.ts';
 import type { Principal } from '../types/aimogate.ts';
 
@@ -127,6 +128,29 @@ export function createAimoGateMcpServer(
         const policy = await store.getPolicy(principal.tenant_id);
         return {
           content: [{ type: 'text', text: JSON.stringify(policy, null, 2) }],
+        };
+      } catch (err) {
+        const message = err instanceof GatewayError ? `${err.status}: ${err.message}` : String(err);
+        return { isError: true, content: [{ type: 'text', text: message }] };
+      }
+    }
+  );
+
+  server.registerTool(
+    'preprocess_prompt',
+    {
+      title: 'Analyze Buyer Prompt & Extract Intent via Gemini API',
+      description:
+        'Passes a natural language procurement instruction or recipe to Gemini API with prompt injection guardrails, returning structured intent, culinary dishes, scaled line items, and normalized units.',
+      inputSchema: {
+        prompt: z.string().min(1).describe('Natural language procurement prompt or recipe text'),
+      },
+    },
+    async ({ prompt }) => {
+      try {
+        const result = await preprocessBuyerPrompt(prompt);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       } catch (err) {
         const message = err instanceof GatewayError ? `${err.status}: ${err.message}` : String(err);

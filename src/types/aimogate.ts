@@ -180,6 +180,7 @@ export interface PreprocessedPromptResult {
   deliver_by: string;
   notes?: string;
   items: DecomposedIngredient[];
+  is_adversarial_probe?: boolean;
 }
 
 export interface OrderItemDTO {
