@@ -66,6 +66,35 @@ Your application will be live at:
 
 ---
 
+## Automated Deployment (One-Click)
+
+Run the automated deployment script directly in Cloud Shell or your authenticated terminal:
+
+```bash
+# Pull latest and run full automated deployment (tests, Cloud Run, Firebase Hosting)
+./deploy.sh
+# OR via npm:
+npm run deploy:full
+```
+
+This single command:
+1. Runs regression tests (`aimogate.test.ts`, `rag.test.ts`) and TypeScript linting.
+2. Builds the Vite production bundle.
+3. Builds and deploys the Cloud Run service `aimogate-api` with the Nemotron 3.5 Super VL endpoint and Valio Aimo credentials.
+4. Deploys Firebase Hosting with the `/api/**` rewrite to Cloud Run.
+5. Verifies live health on the catalog status endpoint (`/api/v1/catalog/status`).
+
+---
+
+## Continuous Deployment (GitHub Actions)
+
+A GitHub Actions workflow is provided at `.github/workflows/deploy.yml`. When you push to `main`, it automatically runs unit tests and builds artifacts. To enable direct continuous deployment from GitHub:
+1. In your GitHub repo settings (**Settings -> Secrets and variables -> Actions**), add:
+   - `GCP_SA_KEY`: Service account JSON key with `roles/run.admin` and `roles/iam.serviceAccountUser`.
+   - `FIREBASE_TOKEN`: Firebase CI token (generated via `firebase login:ci`).
+
+---
+
 ## Local Development
 
 ```bash
