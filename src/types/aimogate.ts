@@ -154,6 +154,9 @@ export interface RecipeMetadata {
   yield_unit?: string;
   cuisine?: string;
   description?: string;
+  is_recognized_from_ingredients?: boolean;
+  missing_staples?: string[];
+  confidence?: number;
 }
 
 export interface PreprocessedPromptResult {

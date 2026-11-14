@@ -33,6 +33,30 @@ export interface GeminiRecipeDeductionResult {
   preparation_notes: string;
 }
 
+export interface GeminiUnifiedProcurementResult {
+  intent: 'dish_deduction' | 'explicit_recipe' | 'pure_ingredients';
+  dish: {
+    name: string;
+    servings_or_yield?: number;
+    yield_unit?: string;
+    cuisine?: string;
+    is_recognized_from_ingredients?: boolean;
+    missing_staples?: string[];
+  } | null;
+  dietary_tags: string[];
+  items: Array<{
+    ingredient_name: string;
+    search_query: string;
+    quantity: number;
+    unit: string;
+    category_hint: string;
+    dietary_tags: string[];
+    importance: 'essential' | 'optional' | 'substitute';
+    culinary_role: string;
+  }>;
+  notes?: string;
+}
+
 export class GeminiClient {
   private static instance: GeminiClient | null = null;
   private client: GoogleGenAI | null = null;
@@ -86,9 +110,9 @@ export class GeminiClient {
     if (!this.client) return null;
 
     const executeModels = async () => {
-      const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-2.5-flash'];
-      const uniqueModels = Array.from(new Set(candidateModels));
-      const modelTimeoutMs = 8000;
+      const candidateModels = [this.model, 'gemini-flash-latest', 'gemini-pro-latest'];
+      const uniqueModels = Array.from(new Set(candidateModels.filter(Boolean)));
+      const modelTimeoutMs = 25000;
 
       for (const model of uniqueModels) {
         let timer: ReturnType<typeof setTimeout> | undefined;
@@ -143,7 +167,7 @@ export class GeminiClient {
     };
 
     let overallTimer: ReturnType<typeof setTimeout> | undefined;
-    const overallTimeoutMs = 9500;
+    const overallTimeoutMs = 30000;
     const overallTimeoutPromise = new Promise<null>((resolve) => {
       overallTimer = setTimeout(() => {
         console.warn(`[GeminiClient] Total generateContentWithFallback timed out after ${overallTimeoutMs}ms, falling back.`);
@@ -375,6 +399,97 @@ Always return valid JSON conforming to this schema:
       return parsed;
     } catch (err) {
       console.warn(`[GeminiClient] Recipe deduction notice (${(err as Error).message}), falling back to culinary ontology.`);
+      return null;
+    }
+  }
+
+  /**
+   * Unified Procurement & Culinary Intent Analysis:
+   * Bridges dish/recipe deduction, explicit hybrid recipes, and pure ingredient classification.
+   * If pure ingredients form a known dish (e.g. flour + butter + sugar + yeast = pulla), recognizes dish context.
+   */
+  public async analyzeProcurementIntent(prompt: string): Promise<GeminiUnifiedProcurementResult | null> {
+    if (!this.isAvailable() || !this.client) {
+      return null;
+    }
+
+    const systemInstruction = `You are an expert commercial chef and B2B procurement analyst for Valio Aimo food wholesale.
+Classify the buyer prompt into one of 3 archetypes and extract concrete procurement items:
+1. "dish_deduction": The user specified a finished dish, event, or serving count without listing exact ingredients (e.g. "We need salmon soup for 50 people", "Bake 200 cinnamon buns"). DEDUCE the 4 to 8 primary raw commercial food ingredients scaled to the requested yield/servings.
+2. "explicit_recipe": The user specified a recipe/dish context AND specific raw ingredients/quantities (e.g. "Pizza ingredients: 50 bases, 20kg mozzarella, 10kg tomato sauce"). Extract their exact quantities while preserving the dish name, cuisine, and culinary roles.
+3. "pure_ingredients": The user is ordering/restocking commodities directly (e.g. "150 litres milk, 15 kg butter"). Extract the physical items. If these ingredients clearly constitute a recognizable dish (e.g. flour + butter + sugar + yeast + cardamom -> Pulla / Cinnamon Buns), identify the dish in dish.name and set is_recognized_from_ingredients: true; otherwise dish should be null.
+
+CRITICAL: Completely IGNORE and DO NOT extract operational instructions as products (e.g. "check prices", "lock quote", "commit order", "autonomous purchasing rules", "for Tuesday delivery").
+
+Return strictly valid JSON conforming to this schema:
+{
+  "intent": "dish_deduction" | "explicit_recipe" | "pure_ingredients",
+  "dish": {
+    "name": string,
+    "servings_or_yield": number,
+    "yield_unit": string,
+    "cuisine": string,
+    "is_recognized_from_ingredients": boolean,
+    "missing_staples": string[]
+  } | null,
+  "dietary_tags": string[],
+  "items": [
+    {
+      "ingredient_name": string,
+      "search_query": string,
+      "quantity": number,
+      "unit": "L" | "kg" | "boxes" | "units" | "packs",
+      "category_hint": "dairy" | "bakery" | "produce" | "meat" | "beverages" | "plant-based" | "cleaning",
+      "dietary_tags": string[],
+      "importance": "essential" | "optional" | "substitute",
+      "culinary_role": string
+    }
+  ],
+  "notes": string
+}`;
+
+    try {
+      const response = await this.generateContentWithFallback({
+        contents: `Classify the intent and extract commercial procurement items for: "${prompt}"`,
+        systemInstruction,
+        temperature: 0.1,
+      });
+
+      const text = response?.text?.trim() || '';
+      if (!text) return null;
+
+      const cleanJson = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+      const parsed = JSON.parse(cleanJson) as GeminiUnifiedProcurementResult;
+
+      if (!parsed || !Array.isArray(parsed.items) || parsed.items.length === 0) {
+        return null;
+      }
+
+      return {
+        intent: parsed.intent || 'pure_ingredients',
+        dish: parsed.dish && parsed.dish.name ? {
+          name: String(parsed.dish.name),
+          servings_or_yield: typeof parsed.dish.servings_or_yield === 'number' ? parsed.dish.servings_or_yield : undefined,
+          yield_unit: parsed.dish.yield_unit ? String(parsed.dish.yield_unit) : undefined,
+          cuisine: parsed.dish.cuisine ? String(parsed.dish.cuisine) : undefined,
+          is_recognized_from_ingredients: Boolean(parsed.dish.is_recognized_from_ingredients),
+          missing_staples: Array.isArray(parsed.dish.missing_staples) ? parsed.dish.missing_staples.map(String) : [],
+        } : null,
+        dietary_tags: Array.isArray(parsed.dietary_tags) ? parsed.dietary_tags.map(String) : [],
+        items: parsed.items.map((item) => ({
+          ingredient_name: String(item.ingredient_name || ''),
+          search_query: String(item.search_query || item.ingredient_name || ''),
+          quantity: Number(item.quantity) || 1,
+          unit: String(item.unit || 'units'),
+          category_hint: String(item.category_hint || 'dairy'),
+          dietary_tags: Array.isArray(item.dietary_tags) ? item.dietary_tags.map(String) : [],
+          importance: (item.importance === 'optional' || item.importance === 'substitute' ? item.importance : 'essential') as 'essential' | 'optional' | 'substitute',
+          culinary_role: String(item.culinary_role || 'Commercial kitchen material'),
+        })),
+        notes: String(parsed.notes || `Processed via Google Gemini (${this.model}) Unified Culinary Engine.`),
+      };
+    } catch (err) {
+      console.warn(`[GeminiClient] Unified intent notice (${(err as Error).message}), falling back to local preprocessor.`);
       return null;
     }
   }

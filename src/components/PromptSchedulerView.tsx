@@ -457,6 +457,16 @@ export const PromptSchedulerView: React.FC<PromptSchedulerViewProps> = ({
                       &bull; {agentResponse.preprocessed_prompt.recipe.cuisine}
                     </span>
                   )}
+                  {agentResponse.preprocessed_prompt.recipe?.is_recognized_from_ingredients && (
+                    <span className="px-2 py-0.5 rounded-full bg-secondary-container text-on-secondary-container text-[10px] font-medium">
+                      Recognized from Ingredients
+                    </span>
+                  )}
+                  {agentResponse.preprocessed_prompt.recipe?.missing_staples && agentResponse.preprocessed_prompt.recipe.missing_staples.length > 0 && (
+                    <span className="text-[11px] text-amber-500 font-medium">
+                      (Suggested missing: {agentResponse.preprocessed_prompt.recipe.missing_staples.join(', ')})
+                    </span>
+                  )}
                   {agentResponse.preprocessed_prompt.dietary_tags?.map((t) => (
                     <span
                       key={t}

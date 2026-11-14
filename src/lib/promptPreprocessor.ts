@@ -561,6 +561,85 @@ export function deduceRecipeFromOntology(
 }
 
 /**
+ * Reverse Culinary Signature Matching:
+ * Matches a list of pure ingredients against the culinary ontology to classify
+ * whether they constitute a known dish, estimate the batch yield, and detect missing staples.
+ */
+export function reverseMatchRecipe(items: DecomposedIngredient[]): {
+  key: string;
+  recipe: RecipeMetadata;
+  missingStaples: string[];
+  confidence: number;
+} | null {
+  if (!items || items.length < 3) return null;
+
+  let bestMatch: {
+    key: string;
+    recipe: RecipeMetadata;
+    missingStaples: string[];
+    confidence: number;
+  } | null = null;
+
+  const itemNamesLower = items.map((i) => i.ingredient_name.toLowerCase());
+
+  for (const [key, tmpl] of Object.entries(CULINARY_RECIPE_DATABASE)) {
+    let matchedEssential = 0;
+    const missing: string[] = [];
+    const yieldEstimates: number[] = [];
+
+    for (const base of tmpl.baseIngredients) {
+      const searchQ = base.searchQuery.toLowerCase();
+      const baseName = base.name.toLowerCase();
+
+      const foundIdx = itemNamesLower.findIndex(
+        (n) =>
+          n.includes(searchQ) ||
+          base.searchQuery.split(' ').some((w) => w.length > 3 && n.includes(w)) ||
+          baseName.split(' ').some((w) => w.length > 3 && n.includes(w))
+      );
+
+      if (foundIdx !== -1) {
+        matchedEssential++;
+        const item = items[foundIdx];
+        if (base.baseQtyPer10Servings > 0 && item.quantity > 0) {
+          const perUnit = base.baseQtyPer10Servings / (tmpl.defaultYield || 10);
+          const est = Math.round(item.quantity / perUnit);
+          yieldEstimates.push(est);
+        }
+      } else if (base.importance === 'essential') {
+        missing.push(base.name);
+      }
+    }
+
+    const score = matchedEssential / tmpl.baseIngredients.length;
+    if (score >= 0.6 && (!bestMatch || score > bestMatch.confidence)) {
+      const avgYield =
+        yieldEstimates.length > 0
+          ? Math.round(yieldEstimates.reduce((a, b) => a + b, 0) / yieldEstimates.length)
+          : tmpl.defaultYield;
+
+      bestMatch = {
+        key,
+        recipe: {
+          name: tmpl.name,
+          servings_or_yield: avgYield,
+          yield_unit: tmpl.yieldUnit,
+          cuisine: tmpl.cuisine,
+          description: `Recognized from ingredient composition (${Math.round(score * 100)}% signature match).`,
+          is_recognized_from_ingredients: true,
+          missing_staples: missing,
+          confidence: Number(score.toFixed(2)),
+        },
+        missingStaples: missing,
+        confidence: Number(score.toFixed(2)),
+      };
+    }
+  }
+
+  return bestMatch;
+}
+
+/**
  * Parse an explicit multi-material or comma-separated recipe string.
  */
 export function parseExplicitMaterialList(text: string, dietaryTags: string[] = []): DecomposedIngredient[] {
@@ -819,6 +898,19 @@ export function preprocessBuyerPromptSync(
   // 3. Identify if prompt contains multiple materials joined by "and", commas, or line breaks
   const parsedMaterials = parseExplicitMaterialList(prompt, dietaryTags);
   if (parsedMaterials.length > 1) {
+    const recognized = reverseMatchRecipe(parsedMaterials);
+    if (recognized) {
+      return {
+        raw_prompt: prompt,
+        request_type: 'recipe',
+        recipe: recognized.recipe,
+        dietary_tags: dietaryTags,
+        deliver_by: deliverBy,
+        items: parsedMaterials,
+        notes: `Recognized culinary dish '${recognized.recipe.name}' (Estimated yield: ${recognized.recipe.servings_or_yield} ${recognized.recipe.yield_unit}) from ${parsedMaterials.length} raw ingredient signatures.`,
+      };
+    }
+
     return {
       raw_prompt: prompt,
       request_type: 'multi_item',
@@ -853,75 +945,68 @@ export function preprocessBuyerPromptSync(
 /**
  * Preprocess natural language buyer prompts into structured procurement items,
  * identifying recipes, deducing necessary raw materials, and scaling quantities.
- * Async wrapper with Google Gemini reasoning for open-ended uncataloged recipes.
+ * Async wrapper with Google Gemini unified culinary reasoning for open-ended uncataloged recipes.
  */
 export async function preprocessBuyerPrompt(
   prompt: string,
   now: Date = new Date()
 ): Promise<PreprocessedPromptResult> {
-  const tLower = prompt.toLowerCase();
+  const deliverBy = calculateDefaultDeliverBy(now);
 
-  // 1. Google Gemini 2.5 Inference for custom recipes & multi-item natural language extraction
+  // 1. Google Gemini Unified Procurement & Culinary Analysis
   if (process.env.DISABLE_REMOTE_LLM !== 'true') {
     try {
       const gemini = GeminiClient.getInstance();
       if (gemini.isAvailable()) {
-        if (tLower.includes('recipe') || tLower.includes('ingredients for') || tLower.includes('ainekset')) {
-          const geminiRecipe = await gemini.deduceRecipe(prompt);
-          if (geminiRecipe && geminiRecipe.raw_ingredients && geminiRecipe.raw_ingredients.length > 0) {
-            const deliverBy = calculateDefaultDeliverBy(now);
-            return {
-              raw_prompt: prompt,
-              request_type: 'recipe',
-              recipe: {
-                name: geminiRecipe.recipe_name,
-                servings_or_yield: geminiRecipe.servings_or_yield,
-                yield_unit: geminiRecipe.yield_unit,
-                cuisine: 'Nordic / International Commercial Kitchen',
-              },
-              dietary_tags: geminiRecipe.dietary_tags || [],
-              deliver_by: deliverBy,
-              items: geminiRecipe.raw_ingredients.map((ing) => ({
-                ingredient_name: ing.ingredient_name,
-                search_query: ing.search_query || ing.ingredient_name,
-                quantity: ing.quantity,
-                unit: ing.unit,
-                category_hint: ing.category_hint || 'general',
-                dietary_tags: ing.dietary_tags || [],
-                importance: (ing.importance === 'optional' ? 'optional' : 'essential') as 'essential' | 'optional' | 'substitute',
-                culinary_role: ing.culinary_role || 'Commercial ingredient',
-              })),
-              notes: `Recipe deduced via Google Gemini (${gemini.getModelName()}): ${geminiRecipe.preparation_notes || 'Scaled for commercial batch.'}`,
+        const unified = await gemini.analyzeProcurementIntent(prompt);
+        if (unified && unified.items && unified.items.length > 0) {
+          const dietaryTags = Array.from(new Set([...extractShortTags(prompt), ...unified.dietary_tags]));
+          const isRecipe =
+            unified.intent === 'dish_deduction' ||
+            unified.intent === 'explicit_recipe' ||
+            Boolean(unified.dish && unified.dish.name);
+
+          let recipeMeta: RecipeMetadata | undefined = undefined;
+          if (isRecipe && unified.dish && unified.dish.name) {
+            recipeMeta = {
+              name: unified.dish.name,
+              servings_or_yield: unified.dish.servings_or_yield || 10,
+              yield_unit: unified.dish.yield_unit || 'portions',
+              cuisine: unified.dish.cuisine || 'Commercial Kitchen',
+              description: unified.notes || `Culinary dish: ${unified.dish.name}`,
+              is_recognized_from_ingredients: Boolean(unified.dish.is_recognized_from_ingredients),
+              missing_staples: unified.dish.missing_staples || [],
             };
           }
-        }
 
-        // Multi-item extraction via Google Gemini 2.5
-        const extracted = await gemini.extractProcurementItems(prompt);
-        if (extracted && extracted.length > 1) {
-          const deliverBy = calculateDefaultDeliverBy(now);
-          const dietaryTags = extractShortTags(prompt);
+          const requestType: ProcurementRequestType = isRecipe
+            ? 'recipe'
+            : unified.items.length > 1
+            ? 'multi_item'
+            : 'single_item';
+
           return {
             raw_prompt: prompt,
-            request_type: 'multi_item',
+            request_type: requestType,
+            recipe: recipeMeta,
             dietary_tags: dietaryTags,
             deliver_by: deliverBy,
-            items: extracted.map((item) => ({
+            items: unified.items.map((item) => ({
               ingredient_name: item.ingredient_name,
-              search_query: item.search_query,
+              search_query: item.search_query || item.ingredient_name,
               quantity: item.quantity,
               unit: item.unit,
-              category_hint: item.category_hint,
-              dietary_tags: item.dietary_tags,
-              importance: item.importance as 'essential' | 'optional',
-              culinary_role: 'Procurement line item',
+              category_hint: item.category_hint || 'dairy',
+              dietary_tags: item.dietary_tags || [],
+              importance: item.importance || 'essential',
+              culinary_role: item.culinary_role || 'Commercial kitchen material',
             })),
-            notes: `Extracted ${extracted.length} procurement line items via Google Gemini (${gemini.getModelName()}).`,
+            notes: unified.notes || `Processed via Google Gemini (${gemini.getModelName()}) Unified Culinary Engine.`,
           };
         }
       }
     } catch {
-      // Fallback gracefully
+      // Fallback gracefully to sync local preprocessor
     }
   }
 

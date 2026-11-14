@@ -189,3 +189,15 @@ test('AimoGateStore: runAgentWorkflow handles multi-material and recipe requests
   assert.equal(res.order.status, 'CONFIRMED');
   assert.ok(res.order.total_eur > 0);
 });
+
+test('Prompt Preprocessor: Reverse recipe matching recognizes dish from pure ingredients and estimates yield', () => {
+  const prompt = '25kg wheat flour, 15kg butter, 12kg sugar, 2kg baking powder';
+  const result = preprocessBuyerPromptSync(prompt);
+
+  assert.equal(result.request_type, 'recipe');
+  assert.ok(result.recipe);
+  assert.equal(result.recipe.name, 'Cookies & Biscuits');
+  assert.equal(result.recipe.is_recognized_from_ingredients, true);
+  assert.ok((result.recipe.servings_or_yield || 0) >= 50);
+  assert.ok(result.items.length >= 4);
+});
