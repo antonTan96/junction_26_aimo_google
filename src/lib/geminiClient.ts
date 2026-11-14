@@ -1,7 +1,9 @@
-import 'dotenv/config';
 import { GoogleGenAI } from '@google/genai';
 import type { RAGProductContext } from './valioAimoRAG.ts';
 import type { TenantPolicy } from '../types/aimogate.ts';
+
+const safeEnv: Record<string, string | undefined> =
+  typeof process !== 'undefined' && process.env ? process.env : {};
 
 export interface GeminiReasoningResult {
   selectedSku: string;
@@ -39,10 +41,10 @@ export class GeminiClient {
 
   constructor() {
     this.apiKey =
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
+      safeEnv.GEMINI_API_KEY ||
+      safeEnv.GOOGLE_API_KEY ||
       '';
-    this.model = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+    this.model = safeEnv.GEMINI_MODEL || 'gemini-flash-latest';
 
     if (this.apiKey) {
       try {
@@ -61,7 +63,7 @@ export class GeminiClient {
   }
 
   public isAvailable(): boolean {
-    if (process.env.DISABLE_REMOTE_LLM === 'true') {
+    if (safeEnv.DISABLE_REMOTE_LLM === 'true') {
       return false;
     }
     return Boolean(this.apiKey && this.client);

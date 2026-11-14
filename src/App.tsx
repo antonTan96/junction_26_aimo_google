@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { DEFAULT_TENANT_ID } from './lib/aimogate';
+import { DEFAULT_TENANT_ID } from './types/aimogate';
 import type {
   AgentRunResponse,
   AuditLogEntry,

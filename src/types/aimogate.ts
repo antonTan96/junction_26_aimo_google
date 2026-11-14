@@ -1,3 +1,5 @@
+export const DEFAULT_TENANT_ID = 'hotel_nordic_group';
+
 export type PrincipalType = 'agent' | 'human' | 'admin';
 
 export interface Principal {
