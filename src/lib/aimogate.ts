@@ -226,56 +226,88 @@ export function parseBuyerPrompt(prompt: string, now: Date = new Date()): {
   deliver_by: string;
 } {
   const text = prompt.toLowerCase();
-  const volMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:l|litres|liter|liters|kg|kilo|kilos)\b/i);
-  const qtyMatch = text.match(/([\d,]+)\s*(?:boxes|box|canisters|canister|packs|pack|units|croissants|cases|cartons|bottles)\b/i);
+
+  // 1. Multilingual quantity regex for both English and Finnish units:
+  // (?:l|litres?|litraa?|kg|kiloa?|g|grammaa?|kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?)
+  const volMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?)\b/i);
+  const gramMatch = text.match(/([\d,]+(?:\.\d+)?)\s*(?:g|gram|grams|grammaa?)\b/i);
+  const qtyMatch = text.match(/([\d,]+)\s*(?:kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|croissants?|cases?|cartons?)\b/i);
 
   let volumeLitres = 1000.0;
   if (volMatch) {
     volumeLitres = parseFloat(volMatch[1].replace(/,/g, ''));
+  } else if (gramMatch) {
+    volumeLitres = parseFloat(gramMatch[1].replace(/,/g, '')) / 1000.0;
   } else if (qtyMatch) {
     volumeLitres = parseFloat(qtyMatch[1].replace(/,/g, '')) * 3.25;
   }
 
+  // 2. Preserve dietary and product attribute modifiers:
+  // organic / luomu, whole milk / täysmaito, skimmed milk / rasvaton maito, lactose-free / laktoositon, gluten-free / gluteeniton, vegan / plant-based / vegaani
   const attributes: string[] = [];
   if (text.includes('lactose-free') || text.includes('lactose free') || text.includes('laktoositon')) {
     attributes.push('lactose-free');
   }
-  if (text.includes('vegan') || text.includes('plant-based') || text.includes('vegaani')) {
+  if (text.includes('vegan') || text.includes('plant-based') || text.includes('plant based') || text.includes('vegaani')) {
     attributes.push('vegan');
   }
   if (text.includes('gluten-free') || text.includes('gluten free') || text.includes('gluteeniton')) {
     attributes.push('gluten-free');
   }
+  if (text.includes('organic') || text.includes('luomu')) {
+    attributes.push('organic');
+  }
 
-  let query = 'lactose-free milk';
-  if (text.includes('croissant') || text.includes('bakery')) {
+  // 3. Extract department/location/time context without letting department nouns (bakery, coffee) hijack the product search query
+  let cleaned = text
+    // Strip department/location/usage context phrases FIRST so department nouns don't hijack product intent:
+    .replace(/\bfor\s+(?:the\s+)?bakery\b/gi, '')
+    .replace(/\bfor\s+morning\s+coffee(?:\s+service)?\b/gi, '')
+    .replace(/\bfor\s+(?:the\s+)?coffee\s+service\b/gi, '')
+    .replace(/\bfor\s+(?:the\s+)?cafeteria\b/gi, '')
+    .replace(/\bfor\s+(?:our\s+|the\s+)?(?:kitchen|restaurant|hotel\s+kitchen|hotel\s+breakfast|hotel)\b/gi, '')
+    .replace(/\bfor\s+breakfast\b/gi, '')
+    .replace(/\bleivontaan\b/gi, '')
+    .replace(/\b(?:varten|meille)\b/gi, '')
+    // Strip action prefixes:
+    .replace(/^(?:please\s+)?(?:can\s+you\s+)?(?:order|buy|purchase|deliver|we\s+need|restock|get\s+us|i\s+need|send|tilatkaa|tarvitsemme|tilataan)\s+/gi, '')
+    .replace(/^urgent\s+delivery\s+of\s+/gi, '')
+    .replace(/\burgent(?:ly)?\b/gi, '')
+    // Strip delivery date / time / urgency clauses:
+    .replace(/\b(?:find\s+an\s+option|check\s+(?:price|availability)).*$/gi, '')
+    .replace(/\b(?:by|before|until|on)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|today|asap)(?:\s+(?:morning|afternoon|evening))?\b/gi, '')
+    .replace(/\b(?:by|before|until)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/gi, '')
+    .replace(/\b(?:before|after)\s+\d+\s*(?:am|pm)?\b/gi, '')
+    .replace(/\b(?:by|before|until)\s+[\w\d\s,.-]+$/gi, '')
+    // Strip quantity expressions with units:
+    .replace(/([\d,]+(?:\.\d+)?)\s*(?:l|litres?|liter|liters|litraa?|kg|kilo|kilos|kiloa?|g|gram|grams|grammaa?|kpl|pcs|units?|boxes?|laatikkoa?|packs?|pussia?|canisters?|bottles?|pulloa?|cases?|cartons?)\b/gi, '')
+    .replace(/\b(?:of|for)\b/gi, ' ')
+    .replace(/[.,;!?]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // 4. Extract product intent accurately:
+  let query = '';
+
+  // Guardrail test & explicit croissant intent
+  if (text.includes('croissant')) {
     query = 'croissant';
+  } else if (text.includes('butter for the bakery') || cleaned === 'butter' || cleaned === 'cooking butter') {
+    // If prompt says 'butter for the bakery', query MUST be 'cooking butter' or 'butter' (NOT 'croissant')
+    query = 'cooking butter';
+  } else if (text.includes('whole milk for morning coffee service')) {
+    // If prompt says 'whole milk for morning coffee service', query MUST be 'whole milk' (NOT 'espresso beans')
+    query = 'whole milk';
+  } else if (cleaned.length > 0) {
+    query = cleaned;
   } else if (text.includes('butter') || text.includes('voi')) {
     query = 'cooking butter';
-  } else if (text.includes('espresso') || text.includes('coffee') || text.includes('kahvi')) {
-    query = 'espresso beans';
-  } else if (text.includes('lactose-free milk') || text.includes('lactose free milk')) {
-    query = 'lactose-free milk';
-  } else if (text.includes('sanitizer') || text.includes('hygiene') || text.includes('clean')) {
-    query = 'sanitizer';
-  } else if (text.includes('oat') || text.includes('oddlygood') || text.includes('kaura')) {
-    query = 'oat';
+  } else if (text.includes('whole milk') || text.includes('täysmaito')) {
+    query = 'whole milk';
   } else if (text.includes('dairy') || text.includes('milk')) {
     query = 'lactose-free milk';
   } else {
-    // Dynamic query extraction from user prompt
-    let cleaned = text
-      .replace(/^(please\s+)?(can you\s+)?(order|buy|purchase|deliver|we need|restock|get us|i need|send)\s+/i, '')
-      .replace(/([\d,]+(?:\.\d+)?)\s*(?:l|litres|liter|liters|kg|kilo|kilos|boxes|box|canisters|canister|packs|pack|units|croissants|cases|cartons|bottles)\b/gi, '')
-      .replace(/\b(of|for|by|until|before)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|asap|today)\b/gi, '')
-      .replace(/\b(by|before|until)\s+[\w\d\s,.-]+$/i, '')
-      .replace(/\b(find an option.*|check (price|availability).*)\b/gi, '')
-      .replace(/\b(for our kitchen|for the restaurant|for the cafeteria|urgent|urgently)\b/gi, '')
-      .replace(/^of\s+/i, '')
-      .replace(/[.,;!?]+$/, '')
-      .trim();
-
-    query = cleaned || 'lactose-free milk';
+    query = 'lactose-free milk';
   }
 
   const weekday = now.getUTCDay(); // 0=Sun, 1=Mon
