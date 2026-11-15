@@ -240,7 +240,7 @@ export default function App() {
     }
   };
 
-  const handleRunAgent = async (prompt: string, mode: string) => {
+  const handleRunAgent = async (prompt: string, mode: string = 'rag') => {
     setIsRunningAgent(true);
     setAgentResponse(null);
     try {
