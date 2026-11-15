@@ -152,6 +152,7 @@ interface CategoryRuleEditorProps {
   category: string;
   categoryTitle: string;
   ruleUsage: CategoryRuleUsageDTO | undefined;
+  defaultMaxEur: number;
   defaultMaxLitres: number;
   onSave?: (
     category: string,
@@ -164,15 +165,18 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
   category,
   categoryTitle,
   ruleUsage,
+  defaultMaxEur,
   defaultMaxLitres,
   onSave,
   onClose,
 }) => {
   const currentWindow: CategoryTimeWindow = ruleUsage?.time_window ?? 'weekly';
-  const currentMax = ruleUsage?.max_storage_litres ?? defaultMaxLitres;
+  const currentMaxEur = ruleUsage?.max_spend_eur ?? defaultMaxEur;
+  const currentMaxLitres = ruleUsage?.max_storage_litres ?? defaultMaxLitres;
   const currentValidUntil = ruleUsage?.rule_valid_until ?? null;
 
-  const [maxStorage, setMaxStorage] = useState<number>(currentMax);
+  const [maxSpend, setMaxSpend] = useState<number>(currentMaxEur);
+  const [maxStorage, setMaxStorage] = useState<number>(currentMaxLitres);
   const [timeWindow, setTimeWindow] = useState<CategoryTimeWindow>(currentWindow);
   const [validUntil, setValidUntil] = useState<string | null>(currentValidUntil);
   const [isSaving, setIsSaving] = useState(false);
@@ -180,10 +184,11 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    setMaxSpend(ruleUsage?.max_spend_eur ?? defaultMaxEur);
     setMaxStorage(ruleUsage?.max_storage_litres ?? defaultMaxLitres);
     setTimeWindow(ruleUsage?.time_window ?? 'weekly');
     setValidUntil(ruleUsage?.rule_valid_until ?? null);
-  }, [ruleUsage, defaultMaxLitres]);
+  }, [ruleUsage, defaultMaxEur, defaultMaxLitres]);
 
   const handleExtendDays = (days: number) => {
     const d = new Date();
@@ -218,6 +223,7 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
     setSaveSuccess(false);
     try {
       await onSave(category, {
+        max_spend_eur: Number(maxSpend),
         max_storage_litres: Number(maxStorage),
         time_window: timeWindow,
         rule_valid_until: validUntil,
@@ -233,17 +239,19 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
   };
 
   const handleReset = () => {
-    setMaxStorage(currentMax);
+    setMaxSpend(currentMaxEur);
+    setMaxStorage(currentMaxLitres);
     setTimeWindow(currentWindow);
     setValidUntil(currentValidUntil);
     setErrorMessage(null);
   };
 
-  const consumed = ruleUsage?.current_period_consumed_litres ?? 0;
-  const usagePct = maxStorage > 0 ? Math.min(100, Math.round((consumed / maxStorage) * 100)) : 0;
+  const consumedEur = ruleUsage?.current_period_consumed_eur ?? 0;
+  const usagePct = maxSpend > 0 ? Math.min(100, Math.round((consumedEur / maxSpend) * 100)) : 0;
   const windowLabel = getWindowLabel(timeWindow);
   const windowUnit = getWindowUnit(timeWindow);
 
+  const spendPresets = [250, 500, 800, 1200, 2500];
   const storagePresets = [250, 500, 1000, 2500, 5000];
   const windowOptions: Array<{ value: CategoryTimeWindow; label: string; sub: string }> = [
     { value: 'weekly', label: 'Weekly', sub: 'Rolling 7 days' },
@@ -279,7 +287,7 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
             </div>
             <p className="text-xs text-on-surface-variant">
               During this active window, orders auto-approve without repeated manual approvals as long as
-              cumulative volume stays within your configured {windowLabel.toLowerCase()} cap.
+              cumulative spending stays within your configured {windowLabel.toLowerCase()} budget.
             </p>
           </div>
         </div>
@@ -291,24 +299,24 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
               Standing rule: Perpetual (No expiration date)
             </div>
             <p className="text-xs text-on-surface-variant">
-              Orders auto-approve without expiring, evaluated continuously against your volume limit.
+              Orders auto-approve without expiring, evaluated continuously against your category monetary limit.
             </p>
           </div>
         </div>
       )}
 
-      {/* Usage Meter & Volume Overview */}
+      {/* Usage Meter & Spend Overview */}
       <div className="p-4 rounded-xl bg-surface-container-lowest/70 border border-outline-variant/40 flex flex-col gap-3">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Gauge className="w-4 h-4 text-primary" />
             <span className="text-xs font-semibold uppercase tracking-wider text-on-surface-variant">
-              {windowLabel} Storage Usage Meter
+              {windowLabel} Monetary Budget Meter
             </span>
           </div>
           <div className="text-xs font-medium text-on-surface tabular-nums">
-            <span className="text-primary font-semibold">{consumed.toFixed(1)}L</span> used of{' '}
-            <span className="font-semibold">{maxStorage.toLocaleString()}L</span> limit
+            <span className="text-primary font-semibold">€{consumedEur.toFixed(2)}</span> used of{' '}
+            <span className="font-semibold">€{maxSpend.toLocaleString()}</span> limit
             {windowUnit && <span className="text-on-surface-variant">{windowUnit}</span>}
           </div>
         </div>
@@ -317,21 +325,21 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
         <div className="w-full bg-surface-container-highest h-2.5 rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all duration-300 ${
-              consumed >= maxStorage
+              consumedEur >= maxSpend && maxSpend > 0
                 ? 'bg-error'
                 : usagePct >= 80
                 ? 'bg-amber-400'
                 : 'bg-primary'
             }`}
-            style={{ width: `${Math.min(100, Math.max(consumed > 0 ? 4 : 0, usagePct))}%` }}
+            style={{ width: `${Math.min(100, Math.max(consumedEur > 0 ? 4 : 0, usagePct))}%` }}
           />
         </div>
 
         <div className="flex items-center justify-between text-[11px] text-on-surface-variant tabular-nums">
-          <span>0 L</span>
+          <span>€0</span>
           <span>{usagePct}% consumed in active cycle</span>
           <span>
-            {Math.max(0, maxStorage - consumed).toFixed(1)}L available capacity
+            €{Math.max(0, maxSpend - consumedEur).toFixed(2)} available budget
           </span>
         </div>
       </div>
@@ -348,11 +356,11 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
           </span>
         </div>
 
-        {/* 1. Max Storage Volume Input & Presets */}
+        {/* 1. Category Monetary Spending Limit Input & Presets */}
         <div className="flex flex-col gap-2">
           <div className="flex items-center justify-between text-xs">
-            <label htmlFor={`max-storage-${category}`} className="font-medium text-on-surface">
-              Max Storage Volume Limit (Litres)
+            <label htmlFor={`max-spend-${category}`} className="font-medium text-on-surface">
+              Category Monetary Spending Limit (€ / EUR)
             </label>
             <span className="text-on-surface-variant text-[11px]">
               Orders exceeding this in the time window trigger human review
@@ -360,34 +368,34 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
           </div>
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
             <div className="relative flex-1">
+              <span className="absolute left-3 top-2 text-xs font-semibold text-on-surface-variant pointer-events-none">
+                €
+              </span>
               <input
-                id={`max-storage-${category}`}
+                id={`max-spend-${category}`}
                 type="number"
-                min="1"
+                min="0"
                 max="500000"
                 step="50"
-                value={maxStorage || ''}
-                onChange={(e) => setMaxStorage(Math.max(0, Number(e.target.value)))}
-                className="w-full h-9 rounded-lg bg-surface-container-lowest border border-outline-variant/60 px-3 text-sm font-medium text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/60 tabular-nums"
-                placeholder="e.g. 1000"
+                value={maxSpend || ''}
+                onChange={(e) => setMaxSpend(Math.max(0, Number(e.target.value)))}
+                className="w-full h-9 rounded-lg bg-surface-container-lowest border border-outline-variant/60 pl-7 pr-3 text-sm font-medium text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none focus:border-primary/60 tabular-nums"
+                placeholder="e.g. 800"
               />
-              <span className="absolute right-3 top-2 text-xs font-semibold text-on-surface-variant pointer-events-none">
-                Litres (L)
-              </span>
             </div>
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-              {storagePresets.map((preset) => (
+              {spendPresets.map((preset) => (
                 <button
                   key={preset}
                   type="button"
-                  onClick={() => setMaxStorage(preset)}
+                  onClick={() => setMaxSpend(preset)}
                   className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
-                    maxStorage === preset
+                    maxSpend === preset
                       ? 'bg-primary text-on-primary font-semibold'
                       : 'bg-surface-container border border-outline-variant/50 text-on-surface-variant hover:text-on-surface'
                   }`}
                 >
-                  {preset.toLocaleString()}L
+                  €{preset.toLocaleString()}
                 </button>
               ))}
             </div>
@@ -737,11 +745,29 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
               const isExpanded = expandedCategory === cat;
 
               // Extract category usage & rule configuration
+              const defaultCatSpend: Record<string, number> = {
+                dairy: 800,
+                'plant-based': 600,
+                bakery: 500,
+                beverages: 400,
+                meat: 1200,
+                cleaning: 300,
+                alcohol: 0,
+              };
+
               const ruleUsage: CategoryRuleUsageDTO | undefined =
                 guardrails?.category_usage?.[cat] ||
                 (policy.category_rules?.[cat]
                   ? {
                       ...policy.category_rules[cat],
+                      max_spend_eur:
+                        policy.category_rules[cat].max_spend_eur ??
+                        defaultCatSpend[cat] ??
+                        policy.max_auto_approve_eur,
+                      max_storage_litres:
+                        policy.category_rules[cat].max_storage_litres ??
+                        (cat === 'dairy' ? 1000 : policy.max_auto_approve_litres),
+                      current_period_consumed_eur: 0,
                       current_period_consumed_litres: 0,
                       is_expired: policy.category_rules[cat].rule_valid_until
                         ? Date.now() > new Date(policy.category_rules[cat].rule_valid_until!).getTime()
@@ -759,6 +785,11 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                   : undefined);
 
               const timeWindow: CategoryTimeWindow = ruleUsage?.time_window ?? 'weekly';
+              const maxSpendEur: number =
+                ruleUsage?.max_spend_eur ??
+                defaultCatSpend[cat] ??
+                policy.max_auto_approve_eur;
+              const consumedEur: number = ruleUsage?.current_period_consumed_eur ?? 0;
               const maxStorageLitres: number =
                 ruleUsage?.max_storage_litres ??
                 (cat === 'dairy' ? 1000 : policy.max_auto_approve_litres);
@@ -775,11 +806,11 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
 
               const windowLabel = getWindowLabel(timeWindow);
               const windowUnit = getWindowUnit(timeWindow);
-              const capDisplay = `${windowLabel} cap: ${maxStorageLitres.toLocaleString()}L${windowUnit}`;
+              const capDisplay = `${windowLabel} budget: €${maxSpendEur.toLocaleString()}${windowUnit}`;
 
               const usagePct =
-                maxStorageLitres > 0
-                  ? Math.min(100, Math.round((consumedLitres / maxStorageLitres) * 100))
+                maxSpendEur > 0
+                  ? Math.min(100, Math.round((consumedEur / maxSpendEur) * 100))
                   : 0;
 
               return (
@@ -820,7 +851,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                             }`}
                           >
                             {isAllowed
-                              ? `Auto-approved up to €${policy.max_auto_approve_eur.toLocaleString()}`
+                              ? `Auto-approved up to €${maxSpendEur.toLocaleString()}`
                               : 'Needs your approval'}
                           </div>
                         </div>
@@ -898,19 +929,19 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                       <div className="flex-1 min-w-[140px] max-w-sm bg-surface-container-highest h-2 rounded-full overflow-hidden shrink-0">
                         <div
                           className={`h-full rounded-full transition-all duration-300 ${
-                            consumedLitres >= maxStorageLitres
+                            consumedEur >= maxSpendEur && maxSpendEur > 0
                               ? 'bg-error'
                               : usagePct >= 80
                               ? 'bg-amber-400'
                               : 'bg-primary'
                           }`}
                           style={{
-                            width: `${Math.min(100, Math.max(consumedLitres > 0 ? 4 : 0, usagePct))}%`,
+                            width: `${Math.min(100, Math.max(consumedEur > 0 ? 4 : 0, usagePct))}%`,
                           }}
                         />
                       </div>
                       <span className="text-[11px] text-on-surface-variant tabular-nums whitespace-nowrap">
-                        <strong className="text-on-surface font-semibold">{consumedLitres.toFixed(1)}L</strong> / {maxStorageLitres.toLocaleString()}L ({usagePct}% used)
+                        <strong className="text-on-surface font-semibold">€{consumedEur.toFixed(2)}</strong> / €{maxSpendEur.toLocaleString()} ({usagePct}% used)
                       </span>
                     </div>
                   </div>
@@ -921,6 +952,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                       category={cat}
                       categoryTitle={meta.title}
                       ruleUsage={ruleUsage}
+                      defaultMaxEur={maxSpendEur}
                       defaultMaxLitres={cat === 'dairy' ? 1000 : policy.max_auto_approve_litres}
                       onSave={onUpdateCategoryRule}
                       onClose={() => setExpandedCategory(null)}

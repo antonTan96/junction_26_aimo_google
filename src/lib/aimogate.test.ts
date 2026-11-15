@@ -371,6 +371,44 @@ test('Category rule updates via store/API: access control, validation, and usage
   assert.equal((ruleLog.payload_summary as any).category, 'dairy');
 });
 
+test('Category monetary limits: each category has its own independent monetary limit', () => {
+  const store = new AimoGateStore();
+  const human = store.getPresetPrincipal('human', DEFAULT_TENANT_ID);
+  const agent = store.getPresetPrincipal('agent', DEFAULT_TENANT_ID);
+  const deliverBy = new Date(Date.now() + 3 * 86400_000).toISOString();
+
+  // Update plant-based category limit to €300 (lower than default €600 and tenant default €800)
+  store.updateCategoryRule(human, DEFAULT_TENANT_ID, 'plant-based', {
+    max_spend_eur: 300,
+    time_window: 'weekly',
+  });
+
+  const rule = store.getCategoryRuleWithUsage(DEFAULT_TENANT_ID, 'plant-based');
+  assert.equal(rule.max_spend_eur, 300);
+
+  // Update dairy category limit to €1200 (higher than tenant default €800)
+  store.updateCategoryRule(human, DEFAULT_TENANT_ID, 'dairy', {
+    max_spend_eur: 1200,
+    time_window: 'weekly',
+  });
+
+  const dairyRule = store.getCategoryRuleWithUsage(DEFAULT_TENANT_ID, 'dairy');
+  assert.equal(dairyRule.max_spend_eur, 1200);
+
+  // Order 1: Dairy order of €944 (80 packs of 10L = €944 > tenant default €800, but <= dairy category limit €1200)
+  const qDairy = store.lockQuote(agent, { sku: 'VA-LF-MILK-10L', pack_quantity: 80, deliver_by: deliverBy });
+  assert.equal(qDairy.locked_total_eur, 944);
+  const oDairy = store.commitOrder(agent, { quote_id: qDairy.quote_id, po_reference: 'PO-DAIRY-OWN-LIMIT' });
+  assert.equal(oDairy.status, 'CONFIRMED');
+
+  // Order 2: Plant-based order of €347.50 (25 packs of 10L = €347.50 > plant-based category limit €300, but < tenant default €800)
+  const qOat = store.lockQuote(agent, { sku: 'VA-OAT-BARISTA-10L', pack_quantity: 25, deliver_by: deliverBy });
+  assert.equal(qOat.locked_total_eur, 347.5);
+  const oOat = store.commitOrder(agent, { quote_id: qOat.quote_id, po_reference: 'PO-OAT-EXCEED-CAT-LIMIT' });
+  assert.equal(oOat.status, 'PENDING_APPROVAL');
+  assert.ok(oOat.violation_reasons?.some((r) => r.includes('exceeds autonomous limit of €300.00')));
+});
+
 test('evaluateOrderPolicy: direct unit evaluation across windows and constraints', () => {
   const policy: TenantPolicy = {
     tenant_id: 'tenant_test',

@@ -34,11 +34,15 @@ export type CategoryTimeWindow = 'weekly' | 'daily' | 'monthly' | 'none';
 export interface CategoryRule {
   category: string;
   time_window: CategoryTimeWindow;
-  max_storage_litres: number;
+  max_spend_eur?: number;
+  max_storage_litres?: number;
   rule_valid_until: string | null;
 }
 
 export interface CategoryRuleUsageDTO extends CategoryRule {
+  max_spend_eur: number;
+  max_storage_litres: number;
+  current_period_consumed_eur: number;
   current_period_consumed_litres: number;
   is_expired: boolean;
   days_remaining: number | null;

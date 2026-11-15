@@ -528,9 +528,16 @@ export class ValioAimoRAGService {
         );
       }
 
-      if (totalCostEur > policy.max_auto_approve_eur) {
+      const orderCat = (orderItems[0]?.category || '').toLowerCase();
+      const catRule = policy.category_rules?.[orderCat] || policy.category_rules?.[orderItems[0]?.category || ''];
+      const effectiveCap =
+        catRule?.max_spend_eur !== undefined && catRule.max_spend_eur > 0
+          ? catRule.max_spend_eur
+          : policy.max_auto_approve_eur;
+
+      if (totalCostEur > effectiveCap) {
         policyViolations.push(
-          `Total composite order cost €${totalCostEur.toFixed(2)} exceeds tenant auto-approval limit of €${policy.max_auto_approve_eur.toFixed(2)}`
+          `Total composite order cost €${totalCostEur.toFixed(2)} exceeds ${catRule ? `'${catRule.category}'` : 'tenant'} auto-approval limit of €${effectiveCap.toFixed(2)}`
         );
       }
 
@@ -1056,9 +1063,16 @@ export class ValioAimoRAGService {
       const splitViolations = [
         `PARTIAL AVAILABILITY: Requested ${fulfillmentTiers.requested_volume_litres}L of 1L cartons exceeds available stock (${fulfillmentTiers.best.allocated_packs} packs = ${fulfillmentTiers.best.allocated_volume_litres}L). Formulated Good-Better-Best fulfillment options. Split fulfillment (${splitGood.notes}) requires human sign-off.`,
       ];
-      if (splitPrice > policy.max_auto_approve_eur) {
+      const candidateCat = (primaryCandidate.product.category || 'dairy').toLowerCase();
+      const catRule = policy.category_rules?.[candidateCat] || policy.category_rules?.[primaryCandidate.product.category || ''];
+      const effectiveCap =
+        catRule?.max_spend_eur !== undefined && catRule.max_spend_eur > 0
+          ? catRule.max_spend_eur
+          : policy.max_auto_approve_eur;
+
+      if (splitPrice > effectiveCap) {
         splitViolations.push(
-          `Order total €${splitPrice.toFixed(2)} exceeds autonomous spend limit of €${policy.max_auto_approve_eur.toFixed(2)}`
+          `Order total €${splitPrice.toFixed(2)} exceeds ${catRule ? `'${catRule.category}'` : 'autonomous'} spend limit of €${effectiveCap.toFixed(2)}`
         );
       }
       if (policy.max_auto_approve_litres && splitVol > policy.max_auto_approve_litres) {

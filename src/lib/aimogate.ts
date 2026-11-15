@@ -167,6 +167,12 @@ export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvalu
   const catKey = product.category.toLowerCase();
   const categoryRule = policy.category_rules?.[catKey] || policy.category_rules?.[product.category];
 
+  // Category-specific monetary limit:
+  const catMaxEur =
+    categoryRule?.max_spend_eur !== undefined && categoryRule.max_spend_eur !== null
+      ? Number(categoryRule.max_spend_eur)
+      : maxEur;
+
   if (!matchingGrant && categoryRule) {
     // 1. Expiration check: If rule_valid_until is set and now > rule_valid_until, rule is expired
     if (categoryRule.rule_valid_until !== null && categoryRule.rule_valid_until !== undefined) {
@@ -178,8 +184,8 @@ export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvalu
       }
     }
 
-    // 2. Cumulative storage limit check in active time window
-    if (categoryRule.time_window !== 'none' && categoryRule.max_storage_litres > 0) {
+    // 2. Cumulative storage volume limit check in active time window (if volume configured)
+    if (categoryRule.time_window !== 'none' && (categoryRule.max_storage_litres || 0) > 0) {
       const durationMs = getTimeWindowDurationMs(categoryRule.time_window);
       let pastLitres = 0;
       if (durationMs !== null) {
@@ -196,28 +202,37 @@ export function evaluateOrderPolicy(params: PolicyEvaluationParams): PolicyEvalu
           }
         }
       }
+      const maxVol = Number(categoryRule.max_storage_litres);
       const periodVolume = Number((pastLitres + totalLitres).toFixed(1));
-      if (periodVolume > categoryRule.max_storage_litres) {
+      if (periodVolume > maxVol) {
         const windowName = categoryRule.time_window.charAt(0).toUpperCase() + categoryRule.time_window.slice(1);
         const unit = categoryRule.time_window === 'weekly' ? 'week' : categoryRule.time_window === 'daily' ? 'day' : 'month';
         violations.push(
-          `${windowName} storage limit exceeded for category '${product.category}': Order brings period volume to ${periodVolume.toFixed(1)}L, exceeding limit of ${categoryRule.max_storage_litres.toFixed(1)}L/${unit}. Requires human approval.`
+          `${windowName} storage limit exceeded for category '${product.category}': Order brings period volume to ${periodVolume.toFixed(1)}L, exceeding limit of ${maxVol.toFixed(1)}L/${unit}. Requires human approval.`
         );
       }
-    } else if (categoryRule.time_window === 'none' && categoryRule.max_storage_litres > 0) {
-      if (totalLitres > categoryRule.max_storage_litres) {
+    } else if (categoryRule.time_window === 'none' && (categoryRule.max_storage_litres || 0) > 0) {
+      const maxVol = Number(categoryRule.max_storage_litres);
+      if (totalLitres > maxVol) {
         violations.push(
-          `Order volume ${totalLitres.toFixed(1)}L exceeds category storage limit of ${categoryRule.max_storage_litres.toFixed(1)}L`
+          `Order volume ${totalLitres.toFixed(1)}L exceeds category storage limit of ${maxVol.toFixed(1)}L`
         );
       }
     }
   }
 
-  if (!matchingGrant && lockedEur > maxEur) {
-    if (!violations.some((v) => v.includes('budget exceeded'))) {
-      violations.push(
-        `Order total €${lockedEur.toFixed(2)} exceeds autonomous limit of €${maxEur.toFixed(2)}`
-      );
+  // Category monetary limit enforcement (or fallback to tenant policy limit)
+  if (!matchingGrant && (catMaxEur === 0 || lockedEur > catMaxEur)) {
+    if (!violations.some((v) => v.includes('budget exceeded') || v.includes('exceeds autonomous limit'))) {
+      if (catMaxEur === 0) {
+        violations.push(
+          `Category '${product.category}' has €0 autonomous limit. Human approval required.`
+        );
+      } else {
+        violations.push(
+          `Order total €${lockedEur.toFixed(2)} exceeds autonomous limit of €${catMaxEur.toFixed(2)}`
+        );
+      }
     }
   }
 
@@ -725,14 +740,51 @@ export class AimoGateStore {
           dairy: {
             category: 'dairy',
             time_window: 'weekly',
+            max_spend_eur: 800.0,
             max_storage_litres: 1000.0,
             rule_valid_until: thirtyDaysLater,
           },
           'plant-based': {
             category: 'plant-based',
             time_window: 'weekly',
+            max_spend_eur: 600.0,
             max_storage_litres: 600.0,
             rule_valid_until: thirtyDaysLater,
+          },
+          bakery: {
+            category: 'bakery',
+            time_window: 'weekly',
+            max_spend_eur: 500.0,
+            max_storage_litres: 500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          beverages: {
+            category: 'beverages',
+            time_window: 'weekly',
+            max_spend_eur: 400.0,
+            max_storage_litres: 400.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          meat: {
+            category: 'meat',
+            time_window: 'weekly',
+            max_spend_eur: 1200.0,
+            max_storage_litres: 500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          cleaning: {
+            category: 'cleaning',
+            time_window: 'weekly',
+            max_spend_eur: 300.0,
+            max_storage_litres: 200.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          alcohol: {
+            category: 'alcohol',
+            time_window: 'weekly',
+            max_spend_eur: 0.0,
+            max_storage_litres: 0.0,
+            rule_valid_until: null,
           },
         },
         anomaly_sensitivity_pct: 82,
@@ -748,20 +800,51 @@ export class AimoGateStore {
           dairy: {
             category: 'dairy',
             time_window: 'weekly',
+            max_spend_eur: 1500.0,
             max_storage_litres: 2000.0,
             rule_valid_until: thirtyDaysLater,
           },
           bakery: {
             category: 'bakery',
             time_window: 'weekly',
+            max_spend_eur: 1000.0,
             max_storage_litres: 1000.0,
             rule_valid_until: thirtyDaysLater,
           },
           'plant-based': {
             category: 'plant-based',
             time_window: 'weekly',
+            max_spend_eur: 800.0,
             max_storage_litres: 1000.0,
             rule_valid_until: thirtyDaysLater,
+          },
+          meat: {
+            category: 'meat',
+            time_window: 'weekly',
+            max_spend_eur: 2000.0,
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          beverages: {
+            category: 'beverages',
+            time_window: 'weekly',
+            max_spend_eur: 600.0,
+            max_storage_litres: 500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          cleaning: {
+            category: 'cleaning',
+            time_window: 'weekly',
+            max_spend_eur: 400.0,
+            max_storage_litres: 300.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          alcohol: {
+            category: 'alcohol',
+            time_window: 'weekly',
+            max_spend_eur: 0.0,
+            max_storage_litres: 0.0,
+            rule_valid_until: null,
           },
         },
         anomaly_sensitivity_pct: 75,
@@ -777,8 +860,51 @@ export class AimoGateStore {
           dairy: {
             category: 'dairy',
             time_window: 'weekly',
+            max_spend_eur: 500.0,
             max_storage_litres: 1000.0,
             rule_valid_until: thirtyDaysLater,
+          },
+          'plant-based': {
+            category: 'plant-based',
+            time_window: 'weekly',
+            max_spend_eur: 400.0,
+            max_storage_litres: 500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          bakery: {
+            category: 'bakery',
+            time_window: 'weekly',
+            max_spend_eur: 300.0,
+            max_storage_litres: 300.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          meat: {
+            category: 'meat',
+            time_window: 'weekly',
+            max_spend_eur: 800.0,
+            max_storage_litres: 400.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          beverages: {
+            category: 'beverages',
+            time_window: 'weekly',
+            max_spend_eur: 250.0,
+            max_storage_litres: 200.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          cleaning: {
+            category: 'cleaning',
+            time_window: 'weekly',
+            max_spend_eur: 200.0,
+            max_storage_litres: 100.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          alcohol: {
+            category: 'alcohol',
+            time_window: 'weekly',
+            max_spend_eur: 0.0,
+            max_storage_litres: 0.0,
+            rule_valid_until: null,
           },
         },
         anomaly_sensitivity_pct: 88,
@@ -794,20 +920,51 @@ export class AimoGateStore {
           dairy: {
             category: 'dairy',
             time_window: 'weekly',
+            max_spend_eur: 2500.0,
             max_storage_litres: 3000.0,
             rule_valid_until: thirtyDaysLater,
           },
           'plant-based': {
             category: 'plant-based',
             time_window: 'weekly',
+            max_spend_eur: 1500.0,
             max_storage_litres: 2000.0,
             rule_valid_until: thirtyDaysLater,
           },
           bakery: {
             category: 'bakery',
             time_window: 'weekly',
+            max_spend_eur: 1800.0,
             max_storage_litres: 2000.0,
             rule_valid_until: thirtyDaysLater,
+          },
+          meat: {
+            category: 'meat',
+            time_window: 'weekly',
+            max_spend_eur: 3000.0,
+            max_storage_litres: 1500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          beverages: {
+            category: 'beverages',
+            time_window: 'weekly',
+            max_spend_eur: 1000.0,
+            max_storage_litres: 1000.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          cleaning: {
+            category: 'cleaning',
+            time_window: 'weekly',
+            max_spend_eur: 500.0,
+            max_storage_litres: 500.0,
+            rule_valid_until: thirtyDaysLater,
+          },
+          alcohol: {
+            category: 'alcohol',
+            time_window: 'weekly',
+            max_spend_eur: 0.0,
+            max_storage_litres: 0.0,
+            rule_valid_until: null,
           },
         },
         anomaly_sensitivity_pct: 70,
@@ -2061,7 +2218,16 @@ export class AimoGateStore {
       throw new GatewayError(404, `Policy for '${tenantId}' not found.`);
     }
 
-    if (patch.max_auto_approve_eur !== undefined) policy.max_auto_approve_eur = patch.max_auto_approve_eur;
+    if (patch.max_auto_approve_eur !== undefined) {
+      policy.max_auto_approve_eur = patch.max_auto_approve_eur;
+      if (policy.category_rules) {
+        for (const rule of Object.values(policy.category_rules)) {
+          if (rule.max_spend_eur !== undefined && rule.max_spend_eur < patch.max_auto_approve_eur) {
+            rule.max_spend_eur = patch.max_auto_approve_eur;
+          }
+        }
+      }
+    }
     if (patch.max_auto_approve_litres !== undefined) {
       policy.max_auto_approve_litres = patch.max_auto_approve_litres;
       if (policy.category_rules) {
@@ -2117,16 +2283,28 @@ export class AimoGateStore {
     const result: Record<string, CategoryRuleUsageDTO> = {};
     const orders = Array.from(this.orders.values()).filter((o) => o.tenant_id === tenantId);
 
+    const defaultSpendLimits: Record<string, number> = {
+      dairy: 800.0,
+      'plant-based': 600.0,
+      bakery: 500.0,
+      beverages: 400.0,
+      meat: 1200.0,
+      cleaning: 300.0,
+      alcohol: 0.0,
+    };
+
     for (const cat of SYSTEM_CATEGORIES) {
       const existing: CategoryRule = rules[cat] || {
         category: cat,
         time_window: 'weekly',
+        max_spend_eur: defaultSpendLimits[cat] ?? policy.max_auto_approve_eur,
         max_storage_litres: cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres,
         rule_valid_until: null,
       };
 
       const durationMs = getTimeWindowDurationMs(existing.time_window);
-      let consumed = 0;
+      let consumedLitres = 0;
+      let consumedEur = 0;
       if (durationMs !== null) {
         const windowStartMs = now.getTime() - durationMs;
         for (const o of orders) {
@@ -2135,7 +2313,8 @@ export class AimoGateStore {
           if (isNaN(oTime) || oTime < windowStartMs || oTime > now.getTime()) continue;
           const oCat = (o.category || '').toLowerCase();
           if (oCat === cat) {
-            consumed += Number(o.total_litres) || 0;
+            consumedLitres += Number(o.total_litres) || 0;
+            consumedEur += Number(o.total_eur) || 0;
           }
         }
       }
@@ -2150,12 +2329,24 @@ export class AimoGateStore {
         }
       }
 
+      const maxSpendEur =
+        existing.max_spend_eur !== undefined
+          ? Number(existing.max_spend_eur)
+          : defaultSpendLimits[cat] ?? policy.max_auto_approve_eur;
+
+      const maxStorageLitres =
+        existing.max_storage_litres !== undefined
+          ? Number(existing.max_storage_litres)
+          : cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres;
+
       result[cat] = {
         category: cat,
         time_window: existing.time_window,
-        max_storage_litres: existing.max_storage_litres,
+        max_spend_eur: maxSpendEur,
+        max_storage_litres: maxStorageLitres,
         rule_valid_until: existing.rule_valid_until,
-        current_period_consumed_litres: Number(consumed.toFixed(1)),
+        current_period_consumed_eur: Number(consumedEur.toFixed(2)),
+        current_period_consumed_litres: Number(consumedLitres.toFixed(1)),
         is_expired: isExpired,
         days_remaining: daysRemaining,
       };
@@ -2173,8 +2364,10 @@ export class AimoGateStore {
     return {
       category: cat,
       time_window: 'weekly',
+      max_spend_eur: policy.max_auto_approve_eur,
       max_storage_litres: policy.max_auto_approve_litres,
       rule_valid_until: null,
+      current_period_consumed_eur: 0,
       current_period_consumed_litres: 0,
       is_expired: false,
       days_remaining: null,
@@ -2196,6 +2389,7 @@ export class AimoGateStore {
     const existing: CategoryRule = policy.category_rules[cat] || {
       category: cat,
       time_window: 'weekly',
+      max_spend_eur: cat === 'dairy' ? 800.0 : policy.max_auto_approve_eur,
       max_storage_litres: cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres,
       rule_valid_until: null,
     };
@@ -2208,6 +2402,12 @@ export class AimoGateStore {
     const updatedRule: CategoryRule = {
       category: cat,
       time_window: patch.time_window !== undefined ? patch.time_window : existing.time_window,
+      max_spend_eur:
+        patch.max_spend_eur !== undefined && !isNaN(Number(patch.max_spend_eur))
+          ? Number(patch.max_spend_eur)
+          : existing.max_spend_eur !== undefined
+          ? existing.max_spend_eur
+          : (cat === 'dairy' ? 800.0 : policy.max_auto_approve_eur),
       max_storage_litres:
         patch.max_storage_litres !== undefined && !isNaN(Number(patch.max_storage_litres))
           ? Number(patch.max_storage_litres)
@@ -2228,6 +2428,7 @@ export class AimoGateStore {
       payload_summary: {
         category: cat,
         time_window: updatedRule.time_window,
+        max_spend_eur: updatedRule.max_spend_eur,
         max_storage_litres: updatedRule.max_storage_litres,
         rule_valid_until: updatedRule.rule_valid_until,
       },
