@@ -962,6 +962,14 @@ export class ValioAimoRAGService {
         const availableAlternatives = candidateContexts.filter(
           (c) => c.product.id !== primaryCandidate.product.id && c.isAvailable && c.availablePacks >= c.packsRequired
         );
+        availableAlternatives.sort((a, b) => {
+          const sameBrandA = a.product.brand && primaryCandidate.product.brand && a.product.brand.toLowerCase() === primaryCandidate.product.brand.toLowerCase() ? 0 : 1;
+          const sameBrandB = b.product.brand && primaryCandidate.product.brand && b.product.brand.toLowerCase() === primaryCandidate.product.brand.toLowerCase() ? 0 : 1;
+          if (sameBrandA !== sameBrandB) return sameBrandA - sameBrandB;
+          const diffA = Math.abs(a.comparisonPriceEur - primaryCandidate.comparisonPriceEur);
+          const diffB = Math.abs(b.comparisonPriceEur - primaryCandidate.comparisonPriceEur);
+          return diffA - diffB || a.totalCostEur - b.totalCostEur;
+        });
         const substituteCandidate = availableAlternatives[0];
 
         if (substituteCandidate) {

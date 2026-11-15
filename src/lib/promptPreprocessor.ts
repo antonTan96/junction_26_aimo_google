@@ -76,7 +76,7 @@ export const CULINARY_RECIPE_DATABASE: Record<string, RecipeTemplate> = {
       },
       {
         name: 'Granulated Sugar',
-        searchQuery: 'sokeri',
+        searchQuery: 'Dansukker sokeri',
         baseQtyPer10Servings: 0.12, // 120g per 10 cookies -> 12kg for 1,000 cookies
         unit: 'kg',
         categoryHint: 'bakery',
@@ -94,7 +94,7 @@ export const CULINARY_RECIPE_DATABASE: Record<string, RecipeTemplate> = {
       },
       {
         name: 'Specialty Flavoring (Licorice / Chocolate)',
-        searchQuery: 'lakritsi',
+        searchQuery: 'liquorice powder',
         baseQtyPer10Servings: 0.1,
         unit: 'kg',
         categoryHint: 'bakery',
@@ -535,7 +535,7 @@ export function deduceRecipeFromOntology(
       if (specialtyVariant.includes('licorice') || specialtyVariant.includes('lakritsi')) {
         if (ing.name.includes('Specialty Flavoring')) {
           name = 'Licorice Confectionery / Extract';
-          query = isGlutenFree ? 'gluteeniton lakritsi' : 'lakritsi';
+          query = 'lakritsijauhe';
         }
       } else if (specialtyVariant.includes('chocolate') || specialtyVariant.includes('suklaa')) {
         if (ing.name.includes('Specialty Flavoring')) {

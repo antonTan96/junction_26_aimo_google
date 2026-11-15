@@ -276,9 +276,14 @@ export class ValioAimoCatalogService {
               /\d+g\b/i.test(titleLower) ||
               titleLower.includes(' g ') ||
               titleLower.endsWith('g') ||
-              (titleLower.includes('kg') && item.pack_volume_litres >= 1000)
+              (titleLower.includes('kg') && item.pack_volume_litres >= 1000) ||
+              /\b1\s*l\b/i.test(titleLower) ||
+              item.pack_format?.startsWith('1L')
             ) {
               item.pack_volume_litres = Number((item.pack_volume_litres / 1000.0).toFixed(3));
+              if (item.pack_volume_litres > 10 && (/\b1\s*l\b/i.test(titleLower) || item.pack_format?.startsWith('1L'))) {
+                item.pack_volume_litres = 1.0;
+              }
             }
           }
 
@@ -1309,6 +1314,7 @@ export class ValioAimoCatalogService {
       if (res.ok) {
         const data = (await res.json()) as any;
         for (const p of data.products || []) {
+          if (p.productId && p.productId.startsWith('VA-')) continue;
           if (!p.error) {
             results.set(p.productId, {
               catalogPrice: Number(p.catalogPrice?.value ?? p.listPrice?.value ?? 10.0),
@@ -1320,6 +1326,17 @@ export class ValioAimoCatalogService {
       }
     } catch (err) {
       console.warn('Live price fetch warning (using synthetic defaults):', err);
+    }
+
+    // Built-in synthetic demo staples pricing fallback
+    if (!results.has('VA-LF-MILK-12X1L')) {
+      results.set('VA-LF-MILK-12X1L', { catalogPrice: 12.5, compPrice: 1.04, compUnit: 'L' });
+    }
+    if (!results.has('VA-LF-MILK-10L')) {
+      results.set('VA-LF-MILK-10L', { catalogPrice: 12.5, compPrice: 1.25, compUnit: 'L' });
+    }
+    if (!results.has('VA-OAT-BARISTA-10L')) {
+      results.set('VA-OAT-BARISTA-10L', { catalogPrice: 12.5, compPrice: 1.25, compUnit: 'L' });
     }
 
     return results;
@@ -1346,21 +1363,40 @@ export class ValioAimoCatalogService {
       if (res.ok) {
         const data = (await res.json()) as any;
         for (const p of data.products || []) {
+          if (p.productId && p.productId.startsWith('VA-')) continue;
           const isBlocked = Boolean(p.salesBlock);
-          let packs = 1000;
-          if (p.scheduleLines && p.scheduleLines[0]) {
-            packs = Number(p.scheduleLines[0].availableAmount || 1000);
-            if (packs > 99999) packs = 999;
+          let packs = 0;
+          if (Array.isArray(p.scheduleLines) && p.scheduleLines.length > 0) {
+            const line = p.scheduleLines[0];
+            const lineDate = line.availableDate;
+            const isDateOk = !lineDate || !requestedDate || lineDate <= requestedDate;
+            if (isDateOk) {
+              const amt = Number(line.availableAmount ?? 0);
+              packs = isNaN(amt) ? 0 : amt;
+              if (packs > 99999) packs = 999;
+            }
           }
+          const isAvailable = !isBlocked && packs > 0;
           results.set(p.productId, {
-            isAvailable: !isBlocked && packs > 0,
-            availablePacks: packs,
+            isAvailable,
+            availablePacks: isAvailable ? packs : 0,
             closingTime: p.closingTime,
           });
         }
       }
     } catch (err) {
       console.warn('Live availability fetch warning (using synthetic defaults):', err);
+    }
+
+    // Built-in synthetic demo staples fallback
+    if (!results.has('VA-LF-MILK-12X1L')) {
+      results.set('VA-LF-MILK-12X1L', { isAvailable: true, availablePacks: 180 });
+    }
+    if (!results.has('VA-LF-MILK-10L')) {
+      results.set('VA-LF-MILK-10L', { isAvailable: true, availablePacks: 250 });
+    }
+    if (!results.has('VA-OAT-BARISTA-10L')) {
+      results.set('VA-OAT-BARISTA-10L', { isAvailable: true, availablePacks: 1000 });
     }
 
     return results;
