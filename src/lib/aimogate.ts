@@ -2232,7 +2232,7 @@ export class AimoGateStore {
       policy.max_auto_approve_litres = patch.max_auto_approve_litres;
       if (policy.category_rules) {
         for (const rule of Object.values(policy.category_rules)) {
-          if (rule.max_storage_litres < patch.max_auto_approve_litres) {
+          if (rule.max_storage_litres !== undefined && rule.max_storage_litres < patch.max_auto_approve_litres) {
             rule.max_storage_litres = patch.max_auto_approve_litres;
           }
         }

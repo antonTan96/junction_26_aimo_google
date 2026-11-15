@@ -46,7 +46,7 @@ export interface CategoryRuleUsageDTO extends CategoryRule {
   current_period_consumed_eur: number;
   current_period_consumed_litres: number;
   is_expired: boolean;
-  is_enabled: boolean;
+  is_enabled?: boolean;
   days_remaining: number | null;
 }
 

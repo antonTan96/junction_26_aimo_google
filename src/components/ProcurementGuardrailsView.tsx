@@ -780,6 +780,7 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                       is_expired: policy.category_rules[cat].rule_valid_until
                         ? Date.now() > new Date(policy.category_rules[cat].rule_valid_until!).getTime()
                         : false,
+                      is_enabled: policy.category_rules[cat].is_enabled ?? true,
                       days_remaining: policy.category_rules[cat].rule_valid_until
                         ? Math.max(
                             0,
