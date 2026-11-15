@@ -154,7 +154,7 @@ export default function App() {
         if (galRes.ok) setGlobalAuditLogs(await galRes.json());
         if (ztRes.ok) setZeroTrustData(await ztRes.json());
       } catch (err) {
-        console.error('Failed to sync AimoGate state:', err);
+        console.error('Failed to sync aimanage state:', err);
       }
     },
     [selectedTenant]

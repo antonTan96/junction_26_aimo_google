@@ -1,6 +1,6 @@
-# AimoGate — Autonomous B2B Procurement Governance for Valio Aimo
+# aimanage — Autonomous B2B Procurement Governance for Valio Aimo
 
-AimoGate is an autonomous procurement engine and Zero-Trust policy gateway built for hotel & restaurant kitchens ordering from **Valio Aimo** (Junction 2026 challenge).
+aimanage is an autonomous procurement engine and Zero-Trust policy gateway built for hotel & restaurant kitchens ordering from **Valio Aimo** (Junction 2026 challenge).
 
 It enables kitchen teams to request supplies in plain English, while an autonomous AI buyer agent evaluates price, unit economics, warehouse stock availability, and hotel-specific safety guardrails.
 

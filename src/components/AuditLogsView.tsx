@@ -77,7 +77,7 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `aimogate-orders-${overview?.ledger_height || 'latest'}.json`;
+    a.download = `aimanage-orders-${overview?.ledger_height || 'latest'}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

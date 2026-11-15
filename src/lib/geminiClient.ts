@@ -252,7 +252,7 @@ export class GeminiClient {
   Packs Required to satisfy ${requiredVolume} units: ${c.packsRequired} packs (Total: €${c.totalCostEur.toFixed(2)})`;
     }).join('\n\n');
 
-    const systemInstruction = `You are AimoGate Autonomous B2B Procurement Agent powered by ${this.model} for client "${policy.tenant_name}".
+    const systemInstruction = `You are aimanage Autonomous B2B Procurement Agent powered by ${this.model} for client "${policy.tenant_name}".
 Your task is to select the most cost-effective, policy-compliant, and in-stock product SKU from the retrieved Valio Aimo candidates.
 Rules:
 1. Prioritize IN_STOCK candidates. If all are out of stock, select the closest candidate so a substitution request can be triggered.
