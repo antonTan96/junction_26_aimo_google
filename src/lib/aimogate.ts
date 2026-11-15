@@ -2675,7 +2675,7 @@ export class AimoGateStore {
 
       const passes = order.status === 'CONFIRMED';
       const summary = passes
-        ? `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) AUTO-APPROVED by aimanage.`
+        ? `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) AUTO-APPROVED by Aimanage.`
         : compositeSubRequest
         ? `Order ${order.order_id} for ${recipeTitle}: Inventory shortage for '${compositeSubRequest.original_name}'. Sent request ${compositeSubRequest.request_id} to accept substitution '${compositeSubRequest.substitute_name}'. Order held in PENDING_APPROVAL.`
         : `Order ${order.order_id} for ${recipeTitle} (${orderItems.length} items, total €${totalOrderCost.toFixed(2)}) HELD by Policy Firewall: ${(order.violation_reasons || []).join('; ')}.`;
@@ -2731,7 +2731,7 @@ export class AimoGateStore {
     traces.push({
       step_number: 1,
       title: 'Autonomous Goal & Intent Analysis',
-      description: `Parsed requirement: ${parsed.volume_litres.toLocaleString()}L of '${parsed.query}' needed by ${parsed.deliver_by.slice(0, 10)}. Initiating catalog discovery via aimanage.`,
+      description: `Parsed requirement: ${parsed.volume_litres.toLocaleString()}L of '${parsed.query}' needed by ${parsed.deliver_by.slice(0, 10)}. Initiating catalog discovery via Aimanage.`,
       action_type: 'reasoning',
       latency_ms: 8,
       tool_input: { prompt: req.prompt, parsed_intent: parsed },
@@ -3132,7 +3132,7 @@ export class AimoGateStore {
       if (order.approval_type === 'RECURRENT_WINDOW') {
         summary = `Order ${order.order_id} AUTO-APPROVED under Active Recurrent Grant (${order.recurrent_grant_id}). Total €${order.total_eur.toFixed(2)} is within standing allocation.`;
       } else {
-        summary = `Order ${order.order_id} AUTO-APPROVED by aimanage. Total €${order.total_eur.toFixed(2)} is within autonomous spend threshold.`;
+        summary = `Order ${order.order_id} AUTO-APPROVED by Aimanage. Total €${order.total_eur.toFixed(2)} is within autonomous spend threshold.`;
       }
     } else {
       const violationStr = (order.violation_reasons || ['Policy limit exceeded']).join('; ');

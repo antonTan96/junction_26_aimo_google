@@ -92,7 +92,7 @@ export const ShellLayout: React.FC<ShellLayoutProps> = ({
             </div>
             <div className="flex flex-col min-w-0">
               <span className="text-base font-semibold tracking-tight text-on-surface font-headline whitespace-nowrap">
-                aimanage
+                Aimanage
               </span>
               <span className="text-xs text-on-surface-variant truncate">
                 Valio Aimo Ordering

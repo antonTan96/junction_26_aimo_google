@@ -85,7 +85,7 @@ export async function createApp() {
 
   app.get('/api', (_req, res) => {
     res.json({
-      gateway: 'aimanage',
+      gateway: 'Aimanage',
       description: 'Zero-Trust B2B Trade & Governance Gateway for Valio Aimo',
       status: 'operational',
       version: '1.0.0',
@@ -792,7 +792,7 @@ export async function startServer() {
   const { httpServer } = await createApp();
   const PORT = Number(process.env.PORT || 3000);
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`aimanage server running on http://0.0.0.0:${PORT} (MCP: /mcp)`);
+    console.log(`Aimanage server running on http://0.0.0.0:${PORT} (MCP: /mcp)`);
 
     // Ensure full catalog is loaded; if falling back to 8 staples, auto-pull full 17,546 catalog from upstream
     const catalog = ValioAimoCatalogService.getInstance();
