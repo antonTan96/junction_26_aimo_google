@@ -151,6 +151,7 @@ function formatRuleValidUntil(validUntil: string | null | undefined): string {
 interface CategoryRuleEditorProps {
   category: string;
   categoryTitle: string;
+  isAllowed?: boolean;
   ruleUsage: CategoryRuleUsageDTO | undefined;
   defaultMaxEur: number;
   defaultMaxLitres: number;
@@ -158,16 +159,19 @@ interface CategoryRuleEditorProps {
     category: string,
     patch: Partial<Omit<CategoryRule, 'category'>>
   ) => Promise<void>;
+  onToggleCategory?: (category: string) => void;
   onClose: () => void;
 }
 
 const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
   category,
   categoryTitle,
+  isAllowed,
   ruleUsage,
   defaultMaxEur,
   defaultMaxLitres,
   onSave,
+  onToggleCategory,
   onClose,
 }) => {
   const currentWindow: CategoryTimeWindow = ruleUsage?.time_window ?? 'weekly';
@@ -227,7 +231,11 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
         max_storage_litres: Number(maxStorage),
         time_window: timeWindow,
         rule_valid_until: validUntil,
+        is_enabled: true,
       });
+      if (!isAllowed && onToggleCategory) {
+        onToggleCategory(category);
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3500);
     } catch (err: unknown) {
@@ -536,7 +544,7 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
         {saveSuccess && (
           <div className="text-xs text-primary font-medium bg-primary-container/40 p-2.5 rounded-lg border border-primary/30 flex items-center gap-2">
             <Check className="w-4 h-4 text-primary" />
-            <span>Category guardrail saved successfully!</span>
+            <span>Category guardrail saved &amp; turned ON automatically!</span>
           </div>
         )}
 
@@ -557,12 +565,12 @@ const CategoryRuleEditor: React.FC<CategoryRuleEditorProps> = ({
               ) : saveSuccess ? (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Saved!</span>
+                  <span>Saved &amp; Turned On!</span>
                 </>
               ) : (
                 <>
                   <Check className="w-3.5 h-3.5" />
-                  <span>Save Rule Configuration</span>
+                  <span>Save &amp; Turn On Rule</span>
                 </>
               )}
             </button>
@@ -951,10 +959,12 @@ export const ProcurementGuardrailsView: React.FC<ProcurementGuardrailsViewProps>
                     <CategoryRuleEditor
                       category={cat}
                       categoryTitle={meta.title}
+                      isAllowed={isAllowed}
                       ruleUsage={ruleUsage}
                       defaultMaxEur={maxSpendEur}
                       defaultMaxLitres={cat === 'dairy' ? 1000 : policy.max_auto_approve_litres}
                       onSave={onUpdateCategoryRule}
+                      onToggleCategory={onToggleCategory}
                       onClose={() => setExpandedCategory(null)}
                     />
                   )}

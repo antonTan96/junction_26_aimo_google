@@ -2248,14 +2248,21 @@ export class AimoGateStore {
         const existing: CategoryRule = policy.category_rules[cat] || {
           category: cat,
           time_window: 'weekly',
+          max_spend_eur: cat === 'dairy' ? 800.0 : policy.max_auto_approve_eur,
           max_storage_litres: policy.max_auto_approve_litres,
           rule_valid_until: null,
+          is_enabled: true,
         };
         policy.category_rules[cat] = {
           ...existing,
           ...rulePatch,
           category: cat,
+          is_enabled: rulePatch.is_enabled !== undefined ? rulePatch.is_enabled : true,
         };
+        // When a rule is configured, turn on the rule automatically
+        if (!policy.allowed_categories.map((c) => c.toLowerCase()).includes(cat)) {
+          policy.allowed_categories.push(cat);
+        }
       }
     }
 
@@ -2339,6 +2346,9 @@ export class AimoGateStore {
           ? Number(existing.max_storage_litres)
           : cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres;
 
+      const isAllowed = (policy.allowed_categories || []).map((c) => c.toLowerCase()).includes(cat);
+      const isEnabled = existing.is_enabled !== undefined ? existing.is_enabled : isAllowed;
+
       result[cat] = {
         category: cat,
         time_window: existing.time_window,
@@ -2348,6 +2358,7 @@ export class AimoGateStore {
         current_period_consumed_eur: Number(consumedEur.toFixed(2)),
         current_period_consumed_litres: Number(consumedLitres.toFixed(1)),
         is_expired: isExpired,
+        is_enabled: isAllowed && !isExpired && isEnabled,
         days_remaining: daysRemaining,
       };
     }
@@ -2361,6 +2372,7 @@ export class AimoGateStore {
     if (all[cat]) return all[cat];
     const policy = this.policies.get(tenantId);
     if (!policy) throw new GatewayError(404, `Policy for '${tenantId}' not found.`);
+    const isAllowed = (policy.allowed_categories || []).map((c) => c.toLowerCase()).includes(cat);
     return {
       category: cat,
       time_window: 'weekly',
@@ -2370,6 +2382,7 @@ export class AimoGateStore {
       current_period_consumed_eur: 0,
       current_period_consumed_litres: 0,
       is_expired: false,
+      is_enabled: isAllowed,
       days_remaining: null,
     };
   }
@@ -2392,6 +2405,7 @@ export class AimoGateStore {
       max_spend_eur: cat === 'dairy' ? 800.0 : policy.max_auto_approve_eur,
       max_storage_litres: cat === 'dairy' ? 1000.0 : policy.max_auto_approve_litres,
       rule_valid_until: null,
+      is_enabled: true,
     };
 
     const validWindows: CategoryTimeWindow[] = ['weekly', 'daily', 'monthly', 'none'];
@@ -2416,9 +2430,15 @@ export class AimoGateStore {
         patch.rule_valid_until !== undefined
           ? patch.rule_valid_until
           : existing.rule_valid_until,
+      is_enabled: patch.is_enabled !== undefined ? patch.is_enabled : true,
     };
 
     policy.category_rules[cat] = updatedRule;
+
+    // When a rule is configured, turn on the rule automatically by whitelisting the category
+    if (!policy.allowed_categories.map((c) => c.toLowerCase()).includes(cat)) {
+      policy.allowed_categories.push(cat);
+    }
 
     this.addAuditLog({
       tenant_id: tenantId,
@@ -2431,6 +2451,7 @@ export class AimoGateStore {
         max_spend_eur: updatedRule.max_spend_eur,
         max_storage_litres: updatedRule.max_storage_litres,
         rule_valid_until: updatedRule.rule_valid_until,
+        is_enabled: updatedRule.is_enabled,
       },
     });
 

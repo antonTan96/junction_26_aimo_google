@@ -37,6 +37,7 @@ export interface CategoryRule {
   max_spend_eur?: number;
   max_storage_litres?: number;
   rule_valid_until: string | null;
+  is_enabled?: boolean;
 }
 
 export interface CategoryRuleUsageDTO extends CategoryRule {
@@ -45,6 +46,7 @@ export interface CategoryRuleUsageDTO extends CategoryRule {
   current_period_consumed_eur: number;
   current_period_consumed_litres: number;
   is_expired: boolean;
+  is_enabled: boolean;
   days_remaining: number | null;
 }
 

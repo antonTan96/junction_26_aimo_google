@@ -409,6 +409,32 @@ test('Category monetary limits: each category has its own independent monetary l
   assert.ok(oOat.violation_reasons?.some((r) => r.includes('exceeds autonomous limit of €300.00')));
 });
 
+test('Category rule auto-activation: configuring a category rule automatically turns on the rule', () => {
+  const store = new AimoGateStore();
+  const human = store.getPresetPrincipal('human', DEFAULT_TENANT_ID);
+
+  // hotel_nordic_group default allowed categories are ['dairy', 'plant-based']
+  const policyBefore = store.policies.get(DEFAULT_TENANT_ID)!;
+  assert.ok(!policyBefore.allowed_categories.includes('meat'));
+
+  // Configure rule for meat
+  store.updateCategoryRule(human, DEFAULT_TENANT_ID, 'meat', {
+    max_spend_eur: 1500,
+    time_window: 'weekly',
+  });
+
+  // Verify meat is now automatically turned on (whitelisted and enabled)
+  const policyAfter = store.policies.get(DEFAULT_TENANT_ID)!;
+  assert.ok(
+    policyAfter.allowed_categories.includes('meat'),
+    'Category must be automatically added to allowed_categories when configured'
+  );
+
+  const usage = store.getCategoryRuleWithUsage(DEFAULT_TENANT_ID, 'meat');
+  assert.equal(usage.is_enabled, true);
+  assert.equal(usage.max_spend_eur, 1500);
+});
+
 test('evaluateOrderPolicy: direct unit evaluation across windows and constraints', () => {
   const policy: TenantPolicy = {
     tenant_id: 'tenant_test',
